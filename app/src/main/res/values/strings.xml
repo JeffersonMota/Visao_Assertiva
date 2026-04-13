@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Visão PCD</string>
+    <string name="action_settings">Settings</string>
+    <string name="mode_walking">Walking</string>
+    <string name="mode_objects">Objects</string>
+    <string name="mode_text">Reading</string>
+    <string name="mode_barcode">Products</string>
+    <string name="mode_money">Money</string>
+    <string name="mode_person">People</string>
+    <string name="mode_clothing">Clothes</string>
+    <string name="mode_environment">Environment</string>
+    <string name="mode_transport">Ônibus</string>
+    <string name="msg_analyzing">Analyzing...</string>
+    <string name="msg_ready">Ready for new query</string>
+</resources>
