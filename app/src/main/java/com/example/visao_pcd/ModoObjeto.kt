@@ -1,5 +1,6 @@
 package com.example.visao_pcd
 
+import android.graphics.Rect
 import android.util.Log
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.nl.translate.TranslateLanguage
@@ -8,9 +9,9 @@ import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.common.model.LocalModel
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.label.ImageLabeling
+import com.google.mlkit.vision.label.custom.CustomImageLabelerOptions
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import com.google.mlkit.vision.objects.ObjectDetection
-import com.google.mlkit.vision.objects.custom.CustomObjectDetectorOptions
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 
 class ModoObjeto {
@@ -19,13 +20,10 @@ class ModoObjeto {
         .setAssetFilePath("detector.tflite")
         .build()
 
-    private val objectDetector = ObjectDetection.getClient(
-        CustomObjectDetectorOptions.Builder(localModel)
-            .setDetectorMode(CustomObjectDetectorOptions.STREAM_MODE)
-            .enableMultipleObjects()
-            .enableClassification()
-            .setClassificationConfidenceThreshold(0.3f)
-            .setMaxPerObjectLabelCount(3)
+    private val customLabeler = ImageLabeling.getClient(
+        CustomImageLabelerOptions.Builder(localModel)
+            .setConfidenceThreshold(0.3f)
+            .setMaxResultCount(5)
             .build()
     )
 
@@ -67,139 +65,52 @@ class ModoObjeto {
     )
 
     fun processar(image: InputImage, imageWidth: Int, callback: (ResultadoObjeto) -> Unit) {
-        val taskDetection = objectDetector.process(image)
+        val taskCustomLabels = customLabeler.process(image)
         val taskLabels = labeler.process(image)
 
-        Tasks.whenAllComplete(taskDetection, taskLabels).addOnCompleteListener {
-            val detectedObjects = if (taskDetection.isSuccessful) taskDetection.result else emptyList()
+        Tasks.whenAllComplete(taskCustomLabels, taskLabels).addOnCompleteListener {
+            val customLabels = if (taskCustomLabels.isSuccessful) taskCustomLabels.result else emptyList()
             val labels = if (taskLabels.isSuccessful) taskLabels.result else emptyList()
 
             val agora = System.currentTimeMillis()
             val boxesFinal = mutableListOf<OverlayView.BoxData>()
             val falasFinais = mutableListOf<String>()
 
-            // Verifica se há componentes de computador na cena para evitar erro de "Instrumento Musical"
-            val temComputador = labels.any { 
-                val t = it.text.lowercase()
-                t.contains("laptop") || t.contains("computer") || t.contains("notebook")
-            }
+            // 1. Identificamos se é um objeto de alta prioridade ou risco (ex: Gilete)
+            val temObjetoRisco = customLabels.any { it.text.lowercase().contains("razor") || it.text.lowercase().contains("blade") }
 
-            for (obj in detectedObjects) {
-                val bestLabel = obj.labels.maxByOrNull { it.confidence }
+            // 2. Unificamos e processamos as labels
+            val allLabels = (customLabels + labels).distinctBy { it.text.lowercase() }
+
+            for (label in allLabels) {
+                val rawName = label.text
                 
-                // --- REGRAS DE DESAMBIGUAÇÃO AVANÇADA ---
-                var rawName = bestLabel?.text ?: ""
-                val labelsTexto = labels.map { it.text.lowercase() }
-                
-                // 1. Controle Remoto vs Celular (Controle é longo, celular tem tela)
-                val temRemote = labelsTexto.any { it.contains("remote") || it.contains("control") }
-                val temPhone = labelsTexto.any { it.contains("phone") || it.contains("mobile") || it.contains("cellular") }
-                
-                if (temRemote && temPhone) {
-                    rawName = "Remote Control" // Prioriza controle se ambos aparecerem
-                } else if (temRemote) {
-                    rawName = "Remote Control"
+                // Thresholds diferenciados por confiança
+                val minConfidence = when {
+                    rawName.lowercase().contains("razor") -> 0.35f // Prioridade para gilete
+                    customLabels.contains(label) -> 0.40f // Modelo customizado costuma ser mais preciso
+                    else -> 0.55f // Modelo genérico ML Kit
                 }
 
-                // 2. Vidro de Perfume / Cosméticos
-                if (labelsTexto.any { it.contains("perfume") || it.contains("cosmetic") || it.contains("fragrance") }) {
-                    rawName = "Perfume"
-                }
+                if (label.confidence < minConfidence) continue
 
-                // 3. Joystick / Game Controller
-                if (labelsTexto.any { it.contains("joystick") || it.contains("gamepad") || it.contains("game controller") }) {
-                    rawName = "Joystick de Videogame"
-                }
-
-                // 4. Ar Condicionado
-                if (labelsTexto.any { it.contains("air conditioner") || it.contains("hvac") }) {
-                    rawName = "Air Conditioner"
-                }
-
-                // 5. Roteador / Modem
-                if (labelsTexto.any { it.contains("router") || it.contains("modem") || it.contains("access point") }) {
-                    rawName = "Router"
-                }
-
-                // 6. Geladeira vs Cadeira (ML Kit às vezes confunde pela verticalidade)
-                val temGeladeiraGlobal = labelsTexto.any { it.contains("refrigerator") || it.contains("fridge") }
-                if ((rawName.lowercase().contains("chair") || rawName.lowercase().contains("furniture")) && temGeladeiraGlobal) {
-                    rawName = "Refrigerator"
-                }
-
-                // 7. Chaves (Prioridade por ser um item crítico pequeno)
-                val temChaveGlobal = labelsTexto.any { it.contains("key") || it.contains("chain") }
-                if (temChaveGlobal && (rawName.isBlank() || rawName.lowercase() in listOf("item", "object", "tool", "fashion good", "metal", "steel", "brass"))) {
-                    rawName = "Key"
-                }
-
-                // 8. Monitor vs Televisão (Desambiguação por contexto)
-                val temTecladoOuMouse = labelsTexto.any { it.contains("keyboard") || it.contains("mouse") }
-                val temControleRemoto = labelsTexto.any { it.contains("remote") || it.contains("control") }
-                val isVisualUnit = rawName.lowercase().let { 
-                    it.contains("screen") || it.contains("monitor") || it.contains("television") || it.contains("tv") || it.contains("display") 
-                }
-                
-                if (isVisualUnit) {
-                    rawName = when {
-                        temTecladoOuMouse -> "Monitor"
-                        temControleRemoto -> "Television"
-                        else -> "Television" // Em ambiente doméstico, TV é mais provável para objetos grandes
-                    }
-                }
-
-                // 9. Mouse e Teclado (Prioridade máxima sobre genéricos)
-                val labelsTextoLower = labelsTexto.map { it.lowercase() }
-                if (rawName.isBlank() || rawName.lowercase() in listOf("item", "object", "packaged goods", "tool", "musical instrument", "furniture")) {
-                    when {
-                        labelsTextoLower.any { it.contains("keyboard") } -> rawName = "Keyboard"
-                        labelsTextoLower.any { it.contains("mouse") } -> rawName = "Mouse"
-                        temComputador -> rawName = "Laptop"
-                    }
-                }
-
-                // Evita que o teclado seja chamado de notebook por causa de labels globais de "computer"
-                if (rawName.lowercase().contains("laptop") && labelsTextoLower.any { it.contains("keyboard") }) {
-                    rawName = "Keyboard"
-                }
-
-                if (bestLabel != null && bestLabel.confidence < 0.45f && rawName.isBlank()) continue
-
-                // Se o detector for genérico ou vazio, tentamos usar o rotulador global
-                val isGeneric = rawName.isBlank() || 
-                               rawName.lowercase() in listOf("item", "object", "thing", "home appliance", "furniture", "fashion good", "food")
-                
-                if (isGeneric && detectedObjects.size <= 3) { 
-                    val bestGlobalLabel = labels.filter { 
-                        it.text.lowercase() !in listOf("item", "object", "furniture", "home appliance", "musical instrument", "tool")
-                    }.maxByOrNull { it.confidence }
-                    
-                    if (bestGlobalLabel != null && bestGlobalLabel.confidence > 0.4f) {
-                        rawName = bestGlobalLabel.text
-                    }
-                }
-
-                if (rawName.isBlank() || rawName.lowercase() in listOf("item", "object")) continue
-
-
-                // --- TRADUÇÃO INSTANTÂNEA ---
                 val nomeTraduzido = getTranslation(rawName)
-                
-                // Se a tradução for vazia, ignoramos o objeto
                 if (nomeTraduzido.isBlank()) continue
                 
-                // Adiciona na interface gráfica (Label) em PORTUGUÊS
-                boxesFinal.add(OverlayView.BoxData(obj.boundingBox, nomeTraduzido))
-
-                // Lógica de Voz
-                val centerX = obj.boundingBox.centerX()
-                val posicao = when {
-                    centerX < imageWidth * 0.3 -> "à esquerda"
-                    centerX > imageWidth * 0.7 -> "à direita"
-                    else -> "à frente"
+                // ImageLabeling não fornece Bounding Boxes reais. 
+                // Para manter a UI e o ModoAndando funcionando (baseado em área),
+                // simulamos um Rect central proporcional à confiança para objetos detectados via Labeling.
+                val simulatedRect = if (label.confidence > 0.7f) {
+                    // Objeto dominante -> Rect maior
+                    Rect(imageWidth/4, 200, 3*imageWidth/4, 600)
+                } else {
+                    // Objeto menor/distante
+                    Rect(imageWidth/2 - 50, 400, imageWidth/2 + 50, 500)
                 }
+                
+                boxesFinal.add(OverlayView.BoxData(simulatedRect, nomeTraduzido))
 
-                val idFala = "$nomeTraduzido-$posicao"
+                val idFala = nomeTraduzido
                 if (agora - ultimoTempoAnuncioGlobal > INTERVALO_NOVO_OBJETO) {
                     if (agora - (objetosVistosRecentemente[idFala] ?: 0L) > INTERVALO_REPETICAO) {
                         falasFinais.add(nomeTraduzido)

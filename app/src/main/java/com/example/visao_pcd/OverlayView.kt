@@ -30,6 +30,7 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
     private var boundingBoxes: List<BoxData> = emptyList()
     private var objectName: String? = null
     private var detectedColorName: String? = null
+    private var detectedMoneyValue: String? = null
     private var appMode: AppMode = AppMode.ANDANDO
     private var proximity: Float = 0f
 
@@ -96,6 +97,11 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
 
     fun updateDetectedColor(colorName: String?) {
         detectedColorName = colorName
+        postInvalidate()
+    }
+
+    fun updateDetectedMoney(moneyValue: String?) {
+        detectedMoneyValue = moneyValue
         postInvalidate()
     }
 
@@ -236,7 +242,11 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 rectPaint.strokeWidth = 3f
                 canvas.drawCircle(centerX, centerY, 15f, rectPaint)
 
-                // Não desenhamos mais o texto (label) nas células a pedido do usuário
+                // Desenha o valor da nota detectada embaixo da mira
+                detectedMoneyValue?.let { value ->
+                    val textWidth = textPaint.measureText(value.uppercase())
+                    drawMultilineText(canvas, value.uppercase(), centerX - (textWidth / 2f), centerY + 80f)
+                }
                 
                 rectPaint.color = originalColor
                 rectPaint.style = originalStyle

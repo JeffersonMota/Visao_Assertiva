@@ -21,13 +21,13 @@ data class Consulta(
 @Dao
 interface ConsultaDao {
     @Insert
-    suspend fun salvar(consulta: Consulta)
+    fun salvar(consulta: Consulta): Long
 
     @Query("SELECT * FROM historico_consultas ORDER BY data DESC LIMIT 50")
-    suspend fun listarUltimas(): List<Consulta>
+    fun listarUltimas(): List<Consulta>
 
     @Query("DELETE FROM historico_consultas")
-    suspend fun limparTudo()
+    fun limparTudo(): Int
 }
 
 @Database(entities = [Consulta::class], version = 1)

@@ -54,6 +54,7 @@ dependencies {
     implementation("com.google.mlkit:object-detection:17.0.0")
     implementation("com.google.mlkit:object-detection-custom:17.0.0")
     implementation("com.google.mlkit:image-labeling:17.0.9")
+    implementation("com.google.mlkit:image-labeling-custom:17.0.3")
     implementation("com.google.mlkit:translate:17.0.1")
     implementation("com.google.mlkit:text-recognition:16.0.0")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")

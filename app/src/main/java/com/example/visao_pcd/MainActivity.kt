@@ -706,11 +706,16 @@ class MainActivity : ModoActivity() {
                 }
                 AppMode.DINHEIRO -> {
                     val bitmap = imageProxy.toBitmap()
-                    modoDinheiro.processar(image, bitmap) { valor ->
-                        falar(valor, force = true)
-                        salvarConsulta("Dinheiro", valor)
+                    modoDinheiro.processar(image, bitmap) { valor, deveFalar ->
+                        if (deveFalar && valor.isNotEmpty()) {
+                            falar(valor, force = true)
+                            salvarConsulta("Dinheiro", valor)
+                        }
+                        runOnUiThread {
+                            binding.overlayView.updateDetectedMoney(valor)
+                        }
+                        imageProxy.close() // Fecha apenas após processar
                     }
-                    imageProxy.close()
                 }
                 AppMode.COR -> {
                     if (now - lastColorAnalysisTime > 1000) {
