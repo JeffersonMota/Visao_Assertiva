@@ -3,12 +3,10 @@ package com.example.visao_pcd
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.RectF
-import com.google.ai.client.generativeai.GenerativeModel
-import com.google.ai.client.generativeai.type.content
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class ModoMicroondas(private val geminiModel: GenerativeModel) {
+class ModoMicroondas(private val groqService: GroqService) {
 
     data class BotaoMicroondas(val nome: String, val rect: RectF)
 
@@ -16,7 +14,7 @@ class ModoMicroondas(private val geminiModel: GenerativeModel) {
     private var lastAnalysisTime: Long = 0
     private val ANALYSIS_INTERVAL = 10000L // 10 segundos para re-analisar o painel completo
 
-    suspend fun analisarPainel(bitmap: Bitmap, callback: (List<BotaoMicroondas>) -> Unit) {
+    fun analisarPainel(bitmap: Bitmap, callback: (List<BotaoMicroondas>) -> Unit) {
         val agora = System.currentTimeMillis()
         if (agora - lastAnalysisTime < ANALYSIS_INTERVAL && botoesDetectados.isNotEmpty()) {
             callback(botoesDetectados)
@@ -24,36 +22,20 @@ class ModoMicroondas(private val geminiModel: GenerativeModel) {
         }
         lastAnalysisTime = agora
 
-        withContext(Dispatchers.IO) {
-            try {
-                val prompt = """
-                    Analise a imagem deste painel de micro-ondas. 
-                    Identifique a localização exata de cada botão (Pipoca, Arroz, Bebidas, Vegetais, Carnes, Peixes, Números 0-9, Ligar, Desligar, etc).
-                    Retorne uma lista no formato JSON: 
-                    [{"nome": "nome_do_botao", "x": top_left_x, "y": top_left_y, "w": width, "h": height}]
-                    Use coordenadas normalizadas de 0 a 1000 em relação ao tamanho da imagem.
-                    Retorne APENAS o JSON.
-                """.trimIndent()
+        val prompt = """
+            Analise a imagem deste painel de micro-ondas. 
+            Identifique a localização exata de cada botão (Pipoca, Arroz, Bebidas, Vegetais, Carnes, Peixes, Números 0-9, Ligar, Desligar, etc).
+            Retorne uma lista no formato JSON: 
+            [{"nome": "nome_do_botao", "x": top_left_x, "y": top_left_y, "w": width, "h": height}]
+            Use coordenadas normalizadas de 0 a 1000 em relação ao tamanho da imagem.
+            Retorne APENAS o JSON.
+        """.trimIndent()
 
-                val response = geminiModel.generateContent(
-                    content {
-                        image(bitmap)
-                        text(prompt)
-                    }
-                )
-                
-                val jsonText = response.text?.replace("```json", "")?.replace("```", "")?.trim() ?: "[]"
-                val novosBotoes = parseBotoes(jsonText, bitmap.width, bitmap.height)
-                
-                withContext(Dispatchers.Main) {
-                    botoesDetectados = novosBotoes
-                    callback(novosBotoes)
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    callback(emptyList())
-                }
-            }
+        groqService.analisarImagem(bitmap, prompt) { responseText ->
+            val jsonText = responseText.replace("```json", "").replace("```", "").trim()
+            val novosBotoes = parseBotoes(jsonText, bitmap.width, bitmap.height)
+            botoesDetectados = novosBotoes
+            callback(novosBotoes)
         }
     }
 
@@ -76,12 +58,11 @@ class ModoMicroondas(private val geminiModel: GenerativeModel) {
         }
     }
 
-    fun detectarBotaoNoToque(x: Float, y: Float, viewW: Int, viewH: Int): String? {
+    fun detectarBotaoNoToque(x: Float, y: Float, viewW: Int, viewH: Int, overlay: OverlayView): String? {
         for (botao in botoesDetectados) {
-            // Aqui precisamos converter as coordenadas do toque (View) para as coordenadas da imagem original/botoes
-            // Ou garantir que os botoes estejam na escala da View.
-            // Para simplificar, assumimos que o OverlayView escalona os botões.
-            if (botao.rect.contains(x, y)) {
+            // Converte o Retangulo do botão (coordenadas da imagem original) para coordenadas da View usando OverlayView
+            val rectF = overlay.getScaledRectForAnalysis(botao.rect)
+            if (rectF.contains(x, y)) {
                 return botao.nome
             }
         }

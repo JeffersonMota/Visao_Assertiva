@@ -12,24 +12,30 @@ import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.custom.CustomImageLabelerOptions
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import com.google.mlkit.vision.objects.ObjectDetection
+import com.google.mlkit.vision.objects.DetectedObject
+import com.google.mlkit.vision.objects.custom.CustomObjectDetectorOptions
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 
 class ModoObjeto {
-    // Implementação de TensorFlow Lite via Custom Model do ML Kit
+    // Implementação de Detecção de Objetos (Substituindo Labeling para ter Bounding Boxes reais)
     private val localModel = LocalModel.Builder()
         .setAssetFilePath("detector.tflite")
         .build()
 
-    private val customLabeler = ImageLabeling.getClient(
-        CustomImageLabelerOptions.Builder(localModel)
-            .setConfidenceThreshold(0.3f)
-            .setMaxResultCount(5)
+    private val objectDetector = ObjectDetection.getClient(
+        CustomObjectDetectorOptions.Builder(localModel)
+            .setDetectorMode(CustomObjectDetectorOptions.STREAM_MODE)
+            .enableMultipleObjects()
+            .enableClassification()
+            .setMaxPerObjectLabelCount(3)
             .build()
     )
 
-    private val labeler = ImageLabeling.getClient(
-        ImageLabelerOptions.Builder()
-            .setConfidenceThreshold(0.3f) // Reduzido para 0.3f para capturar chaves e objetos pequenos
+    private val genericObjectDetector = ObjectDetection.getClient(
+        ObjectDetectorOptions.Builder()
+            .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
+            .enableMultipleObjects()
+            .enableClassification()
             .build()
     )
 
@@ -65,63 +71,46 @@ class ModoObjeto {
     )
 
     fun processar(image: InputImage, imageWidth: Int, callback: (ResultadoObjeto) -> Unit) {
-        val taskCustomLabels = customLabeler.process(image)
-        val taskLabels = labeler.process(image)
+        val agora = System.currentTimeMillis()
+        
+        // Usamos apenas o detector genérico para garantir estabilidade primeiro
+        // O detector customizado pode ser adicionado após validarmos que o genérico funciona
+        genericObjectDetector.process(image)
+            .addOnSuccessListener { genericResults ->
+                val boxesFinal = mutableListOf<OverlayView.BoxData>()
+                val falasFinais = mutableListOf<String>()
 
-        Tasks.whenAllComplete(taskCustomLabels, taskLabels).addOnCompleteListener {
-            val customLabels = if (taskCustomLabels.isSuccessful) taskCustomLabels.result else emptyList()
-            val labels = if (taskLabels.isSuccessful) taskLabels.result else emptyList()
+                for (obj in genericResults) {
+                    val bestLabel = obj.labels.maxByOrNull { it.confidence }
+                    val rawName = bestLabel?.text ?: ""
+                    val confidence = bestLabel?.confidence ?: 0f
+                    
+                    // Se não houver label, mas houver objeto, chamamos de "Objeto"
+                    var nomeFinal = if (rawName.isNotBlank() && confidence > 0.4f) {
+                        getTranslation(rawName)
+                    } else {
+                        "Objeto"
+                    }
 
-            val agora = System.currentTimeMillis()
-            val boxesFinal = mutableListOf<OverlayView.BoxData>()
-            val falasFinais = mutableListOf<String>()
+                    if (nomeFinal.isNotBlank()) {
+                        boxesFinal.add(OverlayView.BoxData(obj.boundingBox, nomeFinal))
 
-            // 1. Identificamos se é um objeto de alta prioridade ou risco (ex: Gilete)
-            val temObjetoRisco = customLabels.any { it.text.lowercase().contains("razor") || it.text.lowercase().contains("blade") }
-
-            // 2. Unificamos e processamos as labels
-            val allLabels = (customLabels + labels).distinctBy { it.text.lowercase() }
-
-            for (label in allLabels) {
-                val rawName = label.text
-                
-                // Thresholds diferenciados por confiança
-                val minConfidence = when {
-                    rawName.lowercase().contains("razor") -> 0.35f // Prioridade para gilete
-                    customLabels.contains(label) -> 0.40f // Modelo customizado costuma ser mais preciso
-                    else -> 0.55f // Modelo genérico ML Kit
-                }
-
-                if (label.confidence < minConfidence) continue
-
-                val nomeTraduzido = getTranslation(rawName)
-                if (nomeTraduzido.isBlank()) continue
-                
-                // ImageLabeling não fornece Bounding Boxes reais. 
-                // Para manter a UI e o ModoAndando funcionando (baseado em área),
-                // simulamos um Rect central proporcional à confiança para objetos detectados via Labeling.
-                val simulatedRect = if (label.confidence > 0.7f) {
-                    // Objeto dominante -> Rect maior
-                    Rect(imageWidth/4, 200, 3*imageWidth/4, 600)
-                } else {
-                    // Objeto menor/distante
-                    Rect(imageWidth/2 - 50, 400, imageWidth/2 + 50, 500)
-                }
-                
-                boxesFinal.add(OverlayView.BoxData(simulatedRect, nomeTraduzido))
-
-                val idFala = nomeTraduzido
-                if (agora - ultimoTempoAnuncioGlobal > INTERVALO_NOVO_OBJETO) {
-                    if (agora - (objetosVistosRecentemente[idFala] ?: 0L) > INTERVALO_REPETICAO) {
-                        falasFinais.add(nomeTraduzido)
-                        objetosVistosRecentemente[idFala] = agora
-                        ultimoTempoAnuncioGlobal = agora
+                        // Lógica de fala:
+                        if (agora - (objetosVistosRecentemente[nomeFinal] ?: 0L) > INTERVALO_REPETICAO) {
+                            if (agora - ultimoTempoAnuncioGlobal > INTERVALO_NOVO_OBJETO) {
+                                falasFinais.add(nomeFinal)
+                                objetosVistosRecentemente[nomeFinal] = agora
+                                ultimoTempoAnuncioGlobal = agora
+                            }
+                        }
                     }
                 }
+                callback(ResultadoObjeto(boxesFinal, falasFinais))
             }
-
-            callback(ResultadoObjeto(boxesFinal, falasFinais))
-        }
+            .addOnFailureListener { e ->
+                Log.e("ModoObjeto", "Erro na detecção genérica", e)
+                callback(ResultadoObjeto(emptyList(), emptyList()))
+            }
     }
 
     // Função para gerar um resumo inteligente da cena usando o Ollama
@@ -151,28 +140,25 @@ class ModoObjeto {
             return manual
         }
 
-        // Termos técnicos aceitos que soam igual em PT ou são empréstimos comuns
+        // Termos técnicos aceitos
         val termosAceitos = listOf("mouse", "notebook", "laptop", "tablet", "joystick", "smartphone")
         if (rawName.lowercase() in termosAceitos) {
-            val capitalized = rawName.lowercase().replaceFirstChar { it.uppercase() }
-            return if (capitalized == "Laptop") "Notebook" else capitalized
+            return rawName.replaceFirstChar { it.uppercase() }
         }
 
-        // 3. Disparamos a tradução do Google em background para as próximas vezes
+        // 3. Disparamos a tradução do Google em background
         if (modelDownloaded) {
             translator.translate(rawName).addOnSuccessListener { traduzido ->
                 val fixed = fixTranslation(traduzido)
                 if (fixed.isNotBlank()) {
                     translationCache[rawName] = fixed
-                } else {
-                    translationCache[rawName] = "" // Marca como ignorado se tradução falhar
                 }
             }
         }
 
-        // Se não houver tradução manual e não estiver no cache, retorna vazio
-        // para NÃO falar em inglês enquanto a tradução do Google não chega.
-        return ""
+        // Se não houver tradução manual, retorna o original temporariamente 
+        // em vez de vazio, para não "sumir" com o objeto da tela.
+        return rawName
     }
 
     private fun fixTranslation(texto: String): String {

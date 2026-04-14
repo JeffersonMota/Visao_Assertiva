@@ -8,7 +8,6 @@ import android.graphics.drawable.BitmapDrawable
 import android.location.Location
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.google.ai.client.generativeai.GenerativeModel
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.maps.model.LatLng
 import kotlinx.coroutines.CoroutineScope
@@ -28,7 +27,7 @@ class ModoOnibus(
     private val context: Context,
     private val fusedLocationClient: FusedLocationProviderClient,
     private val client: OkHttpClient,
-    private val geminiModel: GenerativeModel,
+    private val groqService: GroqService,
     private val scope: CoroutineScope,
     private val googleMapsKey: String
 ) {
@@ -67,7 +66,7 @@ class ModoOnibus(
                         
                         scope.launch(Dispatchers.Main) {
                             adicionarMarcadores(mapView, googleStops)
-                            orientarComGemini(location, googleStops, mapView, onFalar)
+                            orientarComGroq(location, googleStops, mapView, onFalar)
                             mapView.controller.animateTo(GeoPoint(location.latitude, location.longitude))
                         }
                     } catch (e: Exception) {
@@ -78,7 +77,7 @@ class ModoOnibus(
         }
     }
 
-    private fun orientarComGemini(userLoc: Location, stops: List<GtfsStop>, mapView: MapView, onFalar: (String) -> Unit) {
+    private fun orientarComGroq(userLoc: Location, stops: List<GtfsStop>, mapView: MapView, onFalar: (String) -> Unit) {
         if (stops.isEmpty()) { 
             onFalar("Nenhuma parada encontrada próxima.")
             return 
@@ -87,19 +86,10 @@ class ModoOnibus(
         val listStops = stops.take(3).joinToString { "${it.name} em ${it.lat},${it.lon}" }
         val prompt = "Você é um guia para deficientes visuais em Manaus. Minha localização: ${userLoc.latitude}, ${userLoc.longitude}. Paradas próximas encontradas: [$listStops]. Forneça uma instrução curta e direta (máximo 20 palavras) de como chegar na parada mais próxima usando pontos cardeais ou referências simples."
 
-        scope.launch(Dispatchers.IO) {
-            try {
-                val response = geminiModel.generateContent(prompt)
-                val responseText = response.text ?: "A parada ${stops[0].name} é a mais próxima."
-                withContext(Dispatchers.Main) {
-                    onFalar(responseText)
-                    buscarRota(LatLng(userLoc.latitude, userLoc.longitude), LatLng(stops[0].lat, stops[0].lon), mapView)
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    onFalar("Siga para a parada ${stops[0].name}")
-                    buscarRota(LatLng(userLoc.latitude, userLoc.longitude), LatLng(stops[0].lat, stops[0].lon), mapView)
-                }
+        groqService.analisarImagemSemBitmap(prompt) { responseText ->
+            scope.launch(Dispatchers.Main) {
+                onFalar(responseText)
+                buscarRota(LatLng(userLoc.latitude, userLoc.longitude), LatLng(stops[0].lat, stops[0].lon), mapView)
             }
         }
     }

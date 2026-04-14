@@ -56,8 +56,6 @@ class MainActivity : ModoActivity() {
     private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
 
     // --- CONFIGURAÇÃO ---
-    private val GOOGLE_MAPS_KEY = "AIzaSyCOp2I7jfprHoqYT-D4ZEs9lwbcEoajOOI"
-    private val GEMINI_API_KEY = "AIzaSyDpy1dqXmLhXqcy6FlPXTQ7mEbAMagdg3M"
     private var camera: androidx.camera.core.Camera? = null
 
     private data class GtfsStop(
@@ -77,7 +75,6 @@ class MainActivity : ModoActivity() {
     private var lastGeminiAnalysisTime = 0L
     private var lastColorAnalysisTime = 0L
     private var isListeningVoiceCommand = false
-    private lateinit var ollamaService: OllamaService
     private var isAnalyzingAmbiente = false
     private var isAwaitingHighQualityCapture = false
     private lateinit var db: AppDatabase
@@ -95,7 +92,6 @@ class MainActivity : ModoActivity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         db = AppDatabase.getDatabase(this)
-        ollamaService = OllamaService()
 
         // Inicializar OpenStreetMap (Estilo Satélite Híbrido similar à imagem)
         val satelliteHybrid = object : XYTileSource(
@@ -175,7 +171,7 @@ class MainActivity : ModoActivity() {
             requestAllPermissions()
         }
 
-        inicializarModos(GEMINI_API_KEY, GOOGLE_MAPS_KEY)
+        inicializarModos()
         
         setupTTS()
         setupSpeechRecognizer()
@@ -199,20 +195,19 @@ class MainActivity : ModoActivity() {
     }
 
     private val instrucoesFull = "Para utilizar o comando de voz, dê dois toques rápidos na parte de baixo da tela. " +
-                               "Os modos Gratuito são: Objetos, Texto, Dinheiro, Cores, Microondas. " +
-                               "Os modos Pagos são: Ambiente, Andando, Ônibus, Pessoa e Roupa. " +
+                               "Os modos disponíveis são: Objetos, Texto, Dinheiro, Cores e Ambiente Local. " +
                                "Toque 2 vezes na tela e diga o nome do modo para ativar ou para voltar diga menu."
 
     private fun setupMenuClickListeners() {
-        binding.menuBtnAndando.setOnClickListener { setMode(AppMode.ANDANDO) }
         binding.menuBtnObjetos.setOnClickListener { setMode(AppMode.OBJETOS) }
         binding.menuBtnTexto.setOnClickListener { setMode(AppMode.TEXTO) }
         binding.menuBtnDinheiro.setOnClickListener { setMode(AppMode.DINHEIRO) }
+        binding.menuBtnAmbiente.setOnClickListener { setMode(AppMode.AMBIENTE) }
+        binding.menuBtnCor.setOnClickListener { setMode(AppMode.COR) }
+        binding.menuBtnAndando.setOnClickListener { setMode(AppMode.ANDANDO) }
         binding.menuBtnPessoa.setOnClickListener { setMode(AppMode.PESSOA) }
         binding.menuBtnRoupa.setOnClickListener { setMode(AppMode.ROUPA) }
-        binding.menuBtnAmbiente.setOnClickListener { setMode(AppMode.AMBIENTE) }
         binding.menuBtnOnibus.setOnClickListener { setMode(AppMode.ONIBUS) }
-        binding.menuBtnCor.setOnClickListener { setMode(AppMode.COR) }
         binding.menuBtnMicroondas.setOnClickListener { setMode(AppMode.MICROONDAS) }
         
         binding.toolbar.setNavigationOnClickListener {
@@ -226,7 +221,7 @@ class MainActivity : ModoActivity() {
             binding.resultLayout.visibility = View.GONE
             // Interrompe a leitura do TTS se o usuário fechar a tela
             tts?.stop()
-            if (currentAppMode != AppMode.NENHUM && currentAppMode != AppMode.ONIBUS) {
+            if (currentAppMode != AppMode.NENHUM) {
                 startCamera()
             }
         }
@@ -291,10 +286,13 @@ class MainActivity : ModoActivity() {
             
             override fun onSingleTapUp(e: MotionEvent): Boolean {
                 if (currentAppMode == AppMode.MICROONDAS) {
-                    val botao = binding.overlayView.detectBotaoNoToque(e.x, e.y)
+                    val botao = modoMicroondas.detectarBotaoNoToque(e.x, e.y, binding.overlayView.width, binding.overlayView.height, binding.overlayView)
                     if (botao != null) {
-                        falar("Você está com o dedo no botão $botao", force = true)
+                        falar("Botão $botao", force = true)
+                    } else {
+                        falar("Botão não identificado", force = true)
                     }
+                    return true
                 }
                 return super.onSingleTapUp(e)
             }
@@ -404,20 +402,13 @@ class MainActivity : ModoActivity() {
             lower.contains("instruç") || lower.contains("instruc") || lower.contains("ajuda") -> {
                 falar(instrucoesFull, force = true)
             }
-            lower.contains("ônibus") || lower.contains("onibus") -> setMode(AppMode.ONIBUS)
-            lower.contains("microondas") || lower.contains("micro-ondas") -> setMode(AppMode.MICROONDAS)
             lower.contains("objetos") || lower.contains("objeto") -> setMode(AppMode.OBJETOS)
             lower.contains("texto") -> setMode(AppMode.TEXTO)
             lower.contains("dinheiro") -> setMode(AppMode.DINHEIRO)
             lower.contains("cor") || lower.contains("cores") -> setMode(AppMode.COR)
             lower.contains("ambiente") -> setMode(AppMode.AMBIENTE)
-            lower.contains("andando") -> setMode(AppMode.ANDANDO)
-            lower.contains("pessoa") -> setMode(AppMode.PESSOA)
-            lower.contains("roupa") -> setMode(AppMode.ROUPA)
             lower.contains("histórico") || lower.contains("historico") || lower.contains("consultas") || lower.contains("ler histórico") -> lerHistorico()
-            
-            lower.contains("salvar ponto") || lower.contains("marcar") -> modoOnibus.salvarParadaAtual { falar(it) }
-            
+
             lower.contains("menu") || lower.contains("voltar") || lower.contains("parar") -> {
                 setMode(AppMode.NENHUM)
                 binding.resultLayout.visibility = View.GONE
@@ -431,16 +422,16 @@ class MainActivity : ModoActivity() {
         this.currentAppMode = mode
         if (mode != AppMode.NENHUM) {
             val nomeModo = when(mode) {
-                AppMode.ANDANDO -> "Andando"
                 AppMode.OBJETOS -> "Objetos"
                 AppMode.TEXTO -> "Texto"
                 AppMode.DINHEIRO -> "Dinheiro"
+                AppMode.AMBIENTE -> "Ambiente"
+                AppMode.COR -> "Cores"
+                AppMode.ANDANDO -> "Andando"
                 AppMode.PESSOA -> "Pessoa"
                 AppMode.ROUPA -> "Roupa"
-                AppMode.AMBIENTE -> "Ambiente"
                 AppMode.ONIBUS -> "Ônibus"
-                AppMode.COR -> "Cores"
-                AppMode.MICROONDAS -> "Micro-ondas"
+                AppMode.MICROONDAS -> "Microondas"
                 else -> mode.name
             }
             falar("Modo $nomeModo ativado.", priority = true)
@@ -463,30 +454,16 @@ class MainActivity : ModoActivity() {
             binding.mainMenu.visibility = View.GONE
             binding.appBar.visibility = View.VISIBLE
             
-            if (mode == AppMode.ONIBUS) {
-                binding.mapOsm.visibility = View.VISIBLE
-                binding.viewFinder.visibility = View.GONE
-                binding.overlayView.visibility = View.GONE
-                binding.navPanel.visibility = View.GONE 
-                binding.appBar.setBackgroundColor(Color.TRANSPARENT)
-                
-                cameraProvider?.unbindAll()
-                locationOverlay.enableFollowLocation()
-
-                isAwaitingOnibusOption = true
-                falar("Modo ônibus ativado. Diga 1 para buscar paradas.", force = true)
+            binding.mapOsm.visibility = View.GONE
+            binding.viewFinder.visibility = View.VISIBLE
+            binding.overlayView.visibility = View.VISIBLE
+            binding.navPanel.visibility = View.GONE
+            isAwaitingOnibusOption = false
+            
+            if (allPermissionsGranted()) {
+                startCamera()
             } else {
-                binding.mapOsm.visibility = View.GONE
-                binding.viewFinder.visibility = View.VISIBLE
-                binding.overlayView.visibility = View.VISIBLE
-                binding.navPanel.visibility = View.GONE
-                isAwaitingOnibusOption = false
-                
-                if (allPermissionsGranted()) {
-                    startCamera()
-                } else {
-                    ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, CAMERA_PERMISSION_CODE)
-                }
+                ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, CAMERA_PERMISSION_CODE)
             }
         }
     }
@@ -527,11 +504,11 @@ class MainActivity : ModoActivity() {
     }
 
     private fun startCamera() {
-        if (currentAppMode == AppMode.NENHUM || currentAppMode == AppMode.ONIBUS) return
+        if (currentAppMode == AppMode.NENHUM) return
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
-            if (currentAppMode == AppMode.NENHUM || currentAppMode == AppMode.ONIBUS) return@addListener
+            if (currentAppMode == AppMode.NENHUM) return@addListener
             cameraProvider = cameraProviderFuture.get()
 
             val preview = Preview.Builder()
@@ -731,58 +708,14 @@ class MainActivity : ModoActivity() {
                     }
                     imageProxy.close()
                 }
-                /*
-                AppMode.PESSOA, AppMode.ROUPA, AppMode.AMBIENTE -> {
-                    if (now - lastGeminiAnalysisTime > 10000) { 
-                        lastGeminiAnalysisTime = now
-                        val bitmap = imageProxy.toBitmap()
-                        analisarComGemini(bitmap, currentAppMode)
-                    }
-                    imageProxy.close()
-                }
-                */
-                AppMode.PESSOA -> {
-                    if (now - lastGeminiAnalysisTime > 10000) {
-                        lastGeminiAnalysisTime = now
-                        val bitmap = imageProxy.toBitmap()
-                        lifecycleScope.launch {
-                            val descricao = modoPessoa.processar(bitmap)
-                            runOnUiThread {
-                                binding.ivCapturedImage.setImageBitmap(bitmap)
-                                binding.tvExtractedText.text = descricao
-                                binding.resultLayout.visibility = View.VISIBLE
-                                falar(descricao, force = true)
-                                salvarConsulta("Pessoa", descricao)
-                            }
-                        }
-                    }
-                    imageProxy.close()
-                }
-                AppMode.ROUPA -> {
-                    if (now - lastGeminiAnalysisTime > 10000) {
-                        lastGeminiAnalysisTime = now
-                        val bitmap = imageProxy.toBitmap()
-                        lifecycleScope.launch {
-                            val descricao = modoRoupa.processar(bitmap)
-                            runOnUiThread {
-                                binding.ivCapturedImage.setImageBitmap(bitmap)
-                                binding.tvExtractedText.text = descricao
-                                binding.resultLayout.visibility = View.VISIBLE
-                                falar(descricao, force = true)
-                                salvarConsulta("Roupa", descricao)
-                            }
-                        }
-                    }
-                    imageProxy.close()
-                }
                 AppMode.AMBIENTE -> {
                     if (!isAnalyzingAmbiente) {
                         isAnalyzingAmbiente = true
                         val bitmap = imageProxy.toBitmap()
-                        falar("Analisando ambiente com inteligência local...", force = true)
+                        falar("Analisando ambiente com Groq Cloud...", force = true)
                         
-                        val prompt = "Descreva esta cena para um cego de forma curta e objetiva. Fale sobre móveis e obstáculos."
-                        ollamaService.gerarDescricao(prompt) { resposta ->
+                        val prompt = "Descreva esta cena para um cego de forma curta e objetiva. Fale sobre móveis, obstáculos e pessoas. Seja breve."
+                        groqService.analisarImagem(bitmap, prompt) { resposta ->
                             runOnUiThread {
                                 binding.ivCapturedImage.setImageBitmap(bitmap)
                                 binding.tvExtractedText.text = resposta
@@ -798,54 +731,72 @@ class MainActivity : ModoActivity() {
                     }
                 }
                 AppMode.ANDANDO -> {
-                    val width = imageProxy.width
-                    val height = imageProxy.height
-                    modoAndando.processar(image, width, height) { hasObstacle ->
+                    modoAndando.processar(image, imageProxy.width, imageProxy.height) { hasObstacle ->
                         if (hasObstacle) {
-                            falar("Cuidado, obstáculo à frente", priority = true)
+                            falar("Objeto grande à frente", force = true)
+                        }
+                        imageProxy.close()
+                    }
+                }
+                AppMode.PESSOA -> {
+                    val bitmap = imageProxy.toBitmap()
+                    modoPessoa.processar(bitmap) { resposta ->
+                        runOnUiThread {
+                            binding.ivCapturedImage.setImageBitmap(bitmap)
+                            binding.tvExtractedText.text = resposta
+                            binding.resultLayout.visibility = View.VISIBLE
+                            falar(resposta, force = true)
+                            salvarConsulta("Pessoa", resposta)
+                        }
+                        imageProxy.close()
+                    }
+                }
+                AppMode.ROUPA -> {
+                    val bitmap = imageProxy.toBitmap()
+                    modoRoupa.processar(bitmap) { resposta ->
+                        runOnUiThread {
+                            binding.ivCapturedImage.setImageBitmap(bitmap)
+                            binding.tvExtractedText.text = resposta
+                            binding.resultLayout.visibility = View.VISIBLE
+                            falar(resposta, force = true)
+                            salvarConsulta("Roupa", resposta)
+                        }
+                        imageProxy.close()
+                    }
+                }
+                AppMode.ONIBUS -> {
+                    // Modo Ônibus - Dispara a busca de paradas ao entrar no modo
+                    if (now - lastGeminiAnalysisTime > 15000) { // Limita a cada 15s
+                        lastGeminiAnalysisTime = now
+                        runOnUiThread {
+                            binding.mapOsm.visibility = View.VISIBLE
+                            modoOnibus.buscarParadasGoogle(binding.mapOsm) { fala ->
+                                falar(fala, force = true)
+                            }
                         }
                     }
                     imageProxy.close()
                 }
                 AppMode.MICROONDAS -> {
-                    if (now - lastGeminiAnalysisTime > 15000) {
-                        lastGeminiAnalysisTime = now
-                        val bitmap = imageProxy.toBitmap()
-                        lifecycleScope.launch {
-                            modoMicroondas.analisarPainel(bitmap) { botoes ->
-                                runOnUiThread {
-                                    binding.overlayView.updateBotoesMicroondas(botoes)
-                                    if (botoes.isEmpty()) {
-                                        falar("Não identifiquei botões. Tente aproximar ou afastar a câmera.")
-                                    } else {
-                                        falar("Painel identificado. Deslize o dedo na tela para encontrar os botões.")
-                                    }
-                                }
-                            }
-                            imageProxy.close()
+                    val bitmap = imageProxy.toBitmap()
+                    modoMicroondas.analisarPainel(bitmap) { botoes ->
+                        val boxes = botoes.map { 
+                            OverlayView.BoxData(
+                                android.graphics.Rect(
+                                    it.rect.left.toInt(), 
+                                    it.rect.top.toInt(), 
+                                    it.rect.right.toInt(), 
+                                    it.rect.bottom.toInt()
+                                ), 
+                                it.nome
+                            )
                         }
-                    } else {
+                        runOnUiThread {
+                            binding.overlayView.updateBoundingBoxes(boxes)
+                        }
                         imageProxy.close()
                     }
                 }
-                /*
-                AppMode.ANDANDO -> {
-                    modoObjeto.processar(image, imageProxy.width) { resultado ->
-                        val hasObstacle = resultado.boxes.any { 
-                            val areaPercent = (it.rect.width() * it.rect.height()).toFloat() / (imageProxy.width * imageProxy.height)
-                            areaPercent > 0.35
-                        }
-                        if (hasObstacle) {
-                            falar("Cuidado, obstáculo à frente", priority = true)
-                        }
-                        
-                        runOnUiThread {
-                            binding.overlayView.updateBoundingBoxes(resultado.boxes)
-                        }
-                    }
-                    imageProxy.close()
-                }
-                */
                 else -> {
                     imageProxy.close()
                 }

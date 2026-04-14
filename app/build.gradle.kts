@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -16,6 +18,15 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Carregar API Key do local.properties
+        val localProperties = Properties()
+        val localPropertiesFile = rootProject.file("local.properties")
+        if (localPropertiesFile.exists()) {
+            localProperties.load(localPropertiesFile.inputStream())
+        }
+        val groqApiKey = localProperties.getProperty("GROQ_API_KEY") ?: ""
+        buildConfigField("String", "GROQ_API_KEY", "\"$groqApiKey\"")
     }
 
     buildTypes {
@@ -36,6 +47,7 @@ android {
     }
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 }
 
@@ -63,9 +75,6 @@ dependencies {
     implementation("com.google.android.gms:play-services-location:21.1.0")
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("org.osmdroid:osmdroid-android:6.1.18")
-
-    // 3. Google AI Gemini SDK - ATUALIZADO para 0.9.0
-    implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
 
     // 4. MediaPipe para IA Local (On-Device)
     implementation("com.google.mediapipe:tasks-genai:0.10.14")

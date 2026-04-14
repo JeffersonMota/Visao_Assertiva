@@ -31,10 +31,8 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
     private var objectName: String? = null
     private var detectedColorName: String? = null
     private var detectedMoneyValue: String? = null
-    private var appMode: AppMode = AppMode.ANDANDO
+    private var appMode: AppMode = AppMode.NENHUM
     private var proximity: Float = 0f
-
-    private var botoesMicroondas: List<ModoMicroondas.BotaoMicroondas> = emptyList()
 
     private var imageWidth = 0
     private var imageHeight = 0
@@ -52,25 +50,44 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         postInvalidate()
     }
 
-    private fun getScaledRect(rect: Rect): RectF {
+    fun getScaledRect(rect: Rect): RectF {
         if (imageWidth == 0 || imageHeight == 0) return RectF(rect)
 
-        // Com ML Kit, se passamos a rotação no InputImage, 
-        // as coordenadas retornadas já estão no sistema 'upright'.
-        // Só precisamos calcular a escala baseada nas dimensões efetivas.
-        
-        val effectiveWidth = if (rotationDegrees % 180 == 90) imageHeight else imageWidth
-        val effectiveHeight = if (rotationDegrees % 180 == 90) imageWidth else imageHeight
+        // Lógica de mapeamento de coordenadas Camera -> View considerando rotação
+        val scaleX = width.toFloat() / if (rotationDegrees % 180 == 90) imageHeight else imageWidth
+        val scaleY = height.toFloat() / if (rotationDegrees % 180 == 90) imageWidth else imageHeight
 
-        val scaleX = width.toFloat() / effectiveWidth
-        val scaleY = height.toFloat() / effectiveHeight
+        return when (rotationDegrees) {
+            90 -> RectF(
+                rect.top * scaleX,
+                (imageWidth - rect.right) * scaleY,
+                rect.bottom * scaleX,
+                (imageWidth - rect.left) * scaleY
+            )
+            270 -> RectF(
+                (imageHeight - rect.bottom) * scaleX,
+                rect.left * scaleY,
+                (imageHeight - rect.top) * scaleX,
+                rect.right * scaleY
+            )
+            180 -> RectF(
+                (imageWidth - rect.right) * scaleX,
+                (imageHeight - rect.bottom) * scaleY,
+                (imageWidth - rect.left) * scaleX,
+                (imageHeight - rect.top) * scaleY
+            )
+            else -> RectF(
+                rect.left * scaleX,
+                rect.top * scaleY,
+                rect.right * scaleX,
+                rect.bottom * scaleY
+            )
+        }
+    }
 
-        return RectF(
-            rect.left * scaleX,
-            rect.top * scaleY,
-            rect.right * scaleX,
-            rect.bottom * scaleY
-        )
+    fun getScaledRectForAnalysis(rectF: RectF): RectF {
+        val rect = Rect(rectF.left.toInt(), rectF.top.toInt(), rectF.right.toInt(), rectF.bottom.toInt())
+        return getScaledRect(rect)
     }
 
     fun updateMode(mode: AppMode) {
@@ -110,23 +127,6 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         postInvalidate()
     }
 
-    fun updateBotoesMicroondas(botoes: List<ModoMicroondas.BotaoMicroondas>) {
-        botoesMicroondas = botoes
-        postInvalidate()
-    }
-
-    fun detectBotaoNoToque(x: Float, y: Float): String? {
-        if (appMode != AppMode.MICROONDAS) return null
-
-        for (botao in botoesMicroondas) {
-            val rectF = getScaledRect(Rect(botao.rect.left.toInt(), botao.rect.top.toInt(), botao.rect.right.toInt(), botao.rect.bottom.toInt()))
-            if (rectF.contains(x, y)) {
-                return botao.nome
-            }
-        }
-        return null
-    }
-
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
@@ -146,7 +146,6 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 }
                 
                 if (boundingBoxes.isEmpty()) {
-                    // Se não houver objetos, desenha o guia central suave
                     rectPaint.strokeWidth = 8f
                     rectPaint.alpha = 100
                     val margin = 100f
@@ -159,25 +158,6 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 rectPaint.strokeWidth = originalWidth
             }
             AppMode.TEXTO -> {
-                // Removido o desenho das caixas (linhas azuis) no modo texto para um visual mais limpo
-            }
-            AppMode.ANDANDO -> {
-                boundingBoxes.firstOrNull()?.let { boxData ->
-                    val rect = boxData.rect
-                    val padding = 40f
-                    val roundedRect = RectF(
-                        (rect.left - padding).coerceAtLeast(20f),
-                        (rect.top - padding).coerceAtLeast(20f),
-                        (rect.right + padding).coerceAtMost(width.toFloat() - 20f),
-                        (rect.bottom + padding).coerceAtMost(height.toFloat() - 20f)
-                    )
-                    val originalColor = rectPaint.color
-                    // Se proximity > 0.45 (aprox 1 metro dependendo da calibração da câmera), fica vermelho
-                    if (proximity > 0.45f) rectPaint.color = Color.RED else rectPaint.color = Color.rgb(34, 177, 76)
-                    rectPaint.strokeWidth = 18f
-                    canvas.drawRoundRect(roundedRect, 80f, 80f, rectPaint)
-                    rectPaint.color = originalColor
-                }
             }
             AppMode.AMBIENTE -> {
                 val originalColor = rectPaint.color
@@ -201,18 +181,15 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 val originalColor = rectPaint.color
                 val originalStyle = rectPaint.style
                 
-                // Desenha o ponto central (.)
                 rectPaint.color = Color.WHITE
                 rectPaint.style = Paint.Style.FILL
                 canvas.drawCircle(centerX, centerY, 8f, rectPaint)
                 
-                // Desenha a mira ao redor
                 rectPaint.color = Color.GREEN
                 rectPaint.style = Paint.Style.STROKE
                 rectPaint.strokeWidth = 4f
                 canvas.drawCircle(centerX, centerY, 40f, rectPaint)
 
-                // Desenha o nome da cor detectada embaixo da mira
                 detectedColorName?.let { name ->
                     val textWidth = textPaint.measureText(name)
                     drawMultilineText(canvas, name, centerX - (textWidth / 2f), centerY + 80f)
@@ -228,7 +205,6 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 val originalColor = rectPaint.color
                 val originalStyle = rectPaint.style
                 
-                // Desenha a mira exatamente igual ao modo COR
                 rectPaint.color = Color.GREEN
                 rectPaint.style = Paint.Style.STROKE
                 rectPaint.strokeWidth = 5f
@@ -242,7 +218,6 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 rectPaint.strokeWidth = 3f
                 canvas.drawCircle(centerX, centerY, 15f, rectPaint)
 
-                // Desenha o valor da nota detectada embaixo da mira
                 detectedMoneyValue?.let { value ->
                     val textWidth = textPaint.measureText(value.uppercase())
                     drawMultilineText(canvas, value.uppercase(), centerX - (textWidth / 2f), centerY + 80f)
@@ -254,14 +229,26 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
             AppMode.MICROONDAS -> {
                 val originalColor = rectPaint.color
                 val originalWidth = rectPaint.strokeWidth
-                rectPaint.color = Color.GREEN
-                rectPaint.strokeWidth = 6f
-
-                for (botao in botoesMicroondas) {
-                    val rectF = getScaledRect(Rect(botao.rect.left.toInt(), botao.rect.top.toInt(), botao.rect.right.toInt(), botao.rect.bottom.toInt()))
-                    canvas.drawRect(rectF, rectPaint)
-                    // Opcional: drawText(botao.nome, rectF.left, rectF.top)
+                rectPaint.color = Color.CYAN
+                rectPaint.strokeWidth = 8f
+                
+                for (box in boundingBoxes) {
+                    val rectF = getScaledRect(box.rect)
+                    canvas.drawRoundRect(rectF, 20f, 20f, rectPaint)
+                    box.label?.let { label ->
+                        drawMultilineText(canvas, label, rectF.left, rectF.top - 10f)
+                    }
                 }
+                
+                if (boundingBoxes.isEmpty()) {
+                    rectPaint.alpha = 120
+                    val margin = 150f
+                    val guideRect = RectF(margin, margin, width.toFloat() - margin, height.toFloat() - 350f)
+                    canvas.drawRoundRect(guideRect, 40f, 40f, rectPaint)
+                    drawMultilineText(canvas, "Centralize o painel", width/2f - 150f, height/2f)
+                    rectPaint.alpha = 255
+                }
+                
                 rectPaint.color = originalColor
                 rectPaint.strokeWidth = originalWidth
             }
@@ -274,11 +261,9 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         val padding = 20f
         val maxWidth = width * 0.7f
         
-        // Ajusta X para não sair da tela à direita
         val textWidthForScale = textPaint.measureText(text).coerceAtMost(maxWidth)
         var currentX = x.coerceIn(padding, width - textWidthForScale - padding)
         
-        // Ajusta Y para não sair do topo
         var currentY = y.coerceAtLeast(textPaint.textSize + padding)
         
         val words = text.split(" ")
