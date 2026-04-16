@@ -49,6 +49,9 @@ android {
         viewBinding = true
         buildConfig = true
     }
+    androidResources {
+        noCompress("tflite")
+    }
 }
 
 dependencies {
@@ -57,16 +60,16 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.3.2")
     implementation("androidx.camera:camera-camera2:1.3.2")
 
-    // 2. IA ML Kit e Room
+    // 2. IA TFLite e Room
     val room_version = "2.6.1"
     implementation("androidx.room:room-runtime:$room_version")
     implementation("androidx.room:room-ktx:$room_version")
     ksp("androidx.room:room-compiler:$room_version")
 
-    implementation("com.google.mlkit:object-detection:17.0.0")
-    implementation("com.google.mlkit:object-detection-custom:17.0.0")
-    implementation("com.google.mlkit:image-labeling:17.0.9")
-    implementation("com.google.mlkit:image-labeling-custom:17.0.3")
+    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+
     implementation("com.google.mlkit:translate:17.0.1")
     implementation("com.google.mlkit:text-recognition:16.0.0")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")

@@ -1,0 +1,675 @@
+background
+pessoa
+bicicleta
+carro
+moto
+avião
+ônibus
+trem
+caminhão
+barco
+semáforo
+hidrante
+banco
+pássaro
+gato
+cachorro
+cavalo
+ovelha
+vaca
+elefante
+urso
+zebra
+girafa
+mochila
+guarda-chuva
+bolsa de mão
+gravata
+mala
+frisbee
+esquis
+snowboard
+bola
+pipa
+taco de beisebol
+luva de beisebol
+skate
+prancha de surfe
+raquete de tênis
+garrafa
+taça de vinho
+xícara
+garfo
+faca
+colher
+tigela
+banana
+maçã
+sanduíche
+laranja
+brócolis
+cenoura
+cachorro-quente
+pizza
+donut
+bolo
+cadeira
+sofá
+vaso de planta
+cama
+mesa de jantar
+vaso sanitário
+tv
+laptop
+mouse
+controle remoto
+teclado
+celular
+micro-ondas
+forno
+torradeira
+pia
+geladeira
+livro
+relógio
+vaso
+tesoura
+urso de pelúcia
+secador de cabelo
+escova de dentes
+faca de cozinha
+colher de sopa
+garfo de mesa
+panela
+frigideira
+prato
+copo
+caneca
+jarra
+bule
+chaleira
+capacete
+luvas
+botas
+jaqueta
+calças
+camisa
+vestido
+saia
+meias
+sapato
+chinelo
+sandália
+tênis
+boné
+chapéu
+óculos
+relógio de pulso
+pulseira
+anel
+colar
+brincos
+carteira
+mochila escolar
+mala de viagem
+guarda-chuva aberto
+guarda-chuva fechado
+lanterna
+vela
+isqueiro
+fósforos
+caneta
+lápis
+borracha
+caderno
+livro aberto
+livro fechado
+revista
+jornal
+envelope
+carta
+selo
+moeda
+nota de dinheiro
+cartão de crédito
+chave
+cadeado
+celular aberto
+celular fechado
+tablet
+notebook aberto
+notebook fechado
+monitor de computador
+teclado de computador
+mouse de computador
+impressora
+scanner
+roteador
+cabo usb
+carregador de celular
+fone de ouvido
+caixa de som
+televisão ligada
+televisão desligada
+controle remoto da tv
+rádio
+câmera fotográfica
+filmadora
+tripé
+microfone
+guitarra
+violão
+baixo
+teclado musical
+piano
+bateria
+trompete
+saxofone
+flauta
+violino
+bola de futebol
+bola de basquete
+bola de vôlei
+bola de tênis
+raquete de ping-pong
+mesa de ping-pong
+bilhar
+dardo
+arco e flecha
+patins
+bicicleta de corrida
+bicicleta de montanha
+moto de corrida
+carro de corrida
+caminhão de carga
+ônibus escolar
+trem de passageiros
+avião de passageiros
+helicóptero
+barco a vela
+navio de cruzeiro
+submarino
+foguete
+satélite
+telescópio
+microscópio
+lupa
+bússola
+mapa
+globo terrestre
+martelo
+chave de fenda
+alicate
+serra
+furadeira
+prego
+parafuso
+porca
+arruela
+tinta
+pincel
+vassoura
+rodo
+pá
+balde
+esponja
+sabão
+detergente
+amaciante
+ferro de passar
+tábua de passar
+aspirador de pó
+máquina de lavar roupa
+secadora de roupa
+micro-ondas aberto
+geladeira aberta
+fogão
+forno aberto
+pia de cozinha
+torneira
+chuveiro
+vaso sanitário aberto
+banheira
+espelho
+pasta de dentes
+sabonete em barra
+shampoo
+condicionador
+desodorante
+perfume
+pente
+escova de cabelo
+secador de cabelo ligado
+chapinha
+maquiagem
+batom
+esmalte
+tesoura de unha
+lixa de unha
+algodão
+curativo
+remédio
+termômetro
+estetoscópio
+seringa
+cadeira de rodas
+muleta
+andador
+óculos de grau
+aparelho auditivo
+dentadura
+marcapasso
+extintor de incêndio
+hidrante de parede
+saída de emergência
+placa de sinalização
+cone de trânsito
+barreira
+poste de luz
+semáforo pedestre
+faixa de pedestre
+lixeira
+banco de praça
+monumento
+estátua
+fonte de água
+árvore
+flor
+grama
+arbusto
+pedra
+areia
+terra
+lama
+neve
+gelo
+nuvem
+sol
+lua
+estrela
+chuva
+raio
+fogo
+fumaça
+água
+mar
+rio
+lago
+cachoeira
+montanha
+colina
+vale
+caverna
+ilha
+ponte
+estrada
+rua
+calçada
+prédio
+casa
+apartamento
+loja
+supermercado
+farmácia
+hospital
+escola
+igreja
+museu
+teatro
+cinema
+estádio
+parque
+praia
+floresta
+deserto
+fazenda
+celeiro
+trator
+mooinho
+fábrica
+chaminé
+guindaste
+escavadeira
+empilhadeira
+container
+pallet
+caixa de papelão
+saco plástico
+garrafa pet
+lata de alumínio
+papel amassado
+vidro quebrado
+madeira
+metal
+plástico
+tecido
+couro
+pedra preciosa
+ouro
+prata
+diamante
+cristal
+pérola
+concha
+fóssil
+esqueleto
+crânio
+osso
+dente
+cabelo
+olho
+orelha
+nariz
+boca
+mão
+pé
+braço
+perna
+coração
+pulmão
+cérebro
+músculo
+sangue
+DNA
+célula
+átomo
+molécula
+galáxia
+buraco negro
+cometa
+asteroide
+planeta terra
+marte
+júpiter
+saturno
+vênus
+mercúrio
+urano
+netuno
+plutão
+constelação
+aurora boreal
+arco-íris
+eclipse
+vulcão
+terremoto
+tsunami
+furacão
+tornado
+tempestade de areia
+nevasca
+seca
+inundação
+incêndio florestal
+poluição
+reciclagem
+energia solar
+energia eólica
+painel solar
+turbina eólica
+bateria elétrica
+tomada
+interruptor
+lâmpada
+fio elétrico
+circuito
+chip
+robô humanoide
+drone
+IA
+realidade virtual
+óculos vr
+impressora 3d
+biotecnologia
+nanotecnologia
+espaçonave
+estação espacial
+astronauta
+traje espacial
+bandeira do brasil
+escudo
+espada
+machado
+arco
+flecha
+escudo de proteção
+armadura
+coroa
+cetro
+trono
+castelo medieval
+pirâmide
+esfinge
+coliseu
+torre eiffel
+estátua da liberdade
+cristo redentor
+taj mahal
+grande muralha
+partenon
+big ben
+ponte do brooklyn
+casa branca
+pentágono
+kremlin
+vaticano
+meca
+jerusalém
+rio amazonas
+floresta amazônica
+cataratas do iguaçu
+pão de açúcar
+corcovado
+pantanal
+cerrado
+caatinga
+pampas
+mata atlântica
+arquipélago
+vulcão ativo
+glaciar
+iceberg
+recife de corais
+abismo
+cratera
+caverna de gelo
+geiser
+deserto de sal
+oásis
+savana
+tundra
+taiga
+manguezal
+pântano
+recife
+atol
+baía
+golfo
+estreito
+canal
+península
+istmo
+continente
+globo
+mapa mundi
+brinquedo
+boneca
+carrinho de brinquedo
+urso de pelúcia gigante
+lego
+quebra-cabeça
+xadrez
+damas
+dominó
+baralho
+dado
+peão
+ioiô
+pipa colorida
+balão de ar quente
+dirigível
+ufo
+alienígena
+fantasma
+zumbi
+vampiro
+lobisomem
+dragão
+unicórnio
+sereia
+fada
+duende
+gnomo
+troll
+ogro
+gigante
+anão
+mago
+bruxa
+alquimista
+cavaleiro
+samurai
+ninja
+pirata
+viking
+cowboy
+mergulhador
+piloto
+policial
+bombeiro
+médico
+enfermeira
+professor
+cientista
+engenheiro
+arquiteto
+artista
+músico
+escritor
+cozinheiro
+padeiro
+fazendeiro
+pescador
+atleta
+jogador de futebol
+dançarina
+ator
+cantor
+fotógrafo
+jornalista
+advogado
+juiz
+político
+empresário
+programador
+hacker
+gamer
+youtuber
+influencer
+estudante
+criança
+bebê
+idoso
+homem
+mulher
+família
+amigos
+casal
+multidão
+abraço
+beijo
+sorriso
+lágrima
+grito
+silêncio
+música alta
+barulho de carro
+canto de pássaro
+som da chuva
+vento soprando
+trovão forte
+cheiro de café
+gosto de chocolate
+toque macio
+calor do sol
+frio do inverno
+medo
+alegria
+tristeza
+raiva
+amor
+paz
+liberdade
+justiça
+verdade
+sonho
+esperança
+coragem
+força
+inteligência
+sabedoria
+criatividade
+beleza
+natureza viva
+universo infinito
+tempo passando
+história antiga
+futuro tecnológico
+fim do mundo
+novo começo
+luz
+trevas
+caos
+ordem
+equilíbrio
+harmonia
+energia
+matéria
+vácuo
+espaço-tempo
+dimensão
+universo paralelo
+multiverso
+singularidade
+big bang
+evolução
+vida extraterrestre
+teletransporte
+viagem no tempo
+imortalidade
+consciência
+alma
+espírito
+divindade
+sagrado
+profano
+mito
+lenda
+contos de fadas
+fábula
+epopeia
+drama
+comédia
+tragédia
+suspense
+terror
+ficção científica
+fantasia
+romance
+poesia
+arte rupestre
+pintura renascentista
+escultura clássica
+arquitetura moderna
+design gráfico
+moda sustentável
+gastronomia molecular
+tecnologia assistiva
+acessibilidade universal
+inclusão social
+direitos humanos
+ecologia profunda
+sustentabilidade global
+paz mundial
+fundo
+objeto

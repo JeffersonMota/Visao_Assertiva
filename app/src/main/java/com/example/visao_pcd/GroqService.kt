@@ -32,10 +32,11 @@ class GroqService(private val apiKey: String = BuildConfig.GROQ_API_KEY) {
     private fun enviarRequisicao(prompt: String, base64Image: String?, callback: (String) -> Unit) {
         val url = "https://api.groq.com/openai/v1/chat/completions"
         
+        // Reduzimos o max_tokens para 300 para economizar em respostas curtas
         val json = JSONObject().apply {
-            put("model", if (base64Image != null) "llama-3.2-11b-vision-preview" else "llama-3.3-70b-versatile")
+            put("model", if (base64Image != null) "llama-3.2-90b-vision-preview" else "llama-3.3-70b-versatile")
             val messages = JSONArray().apply {
-                put(JSONObject().apply {
+                val userMessage = JSONObject().apply {
                     put("role", "user")
                     val content = JSONArray().apply {
                         put(JSONObject().apply {
@@ -52,10 +53,12 @@ class GroqService(private val apiKey: String = BuildConfig.GROQ_API_KEY) {
                         }
                     }
                     put("content", content)
-                })
+                }
+                put(userMessage)
             }
             put("messages", messages)
             put("max_tokens", 512)
+            put("temperature", 0.7)
         }
 
         val request = Request.Builder()
@@ -83,18 +86,36 @@ class GroqService(private val apiKey: String = BuildConfig.GROQ_API_KEY) {
                         callback("Erro ao processar resposta da inteligência artificial.")
                     }
                 } else {
-                    Log.e("Groq", "Erro na resposta: $body")
-                    callback("O serviço Groq não respondeu corretamente.")
+                    val errorCode = response.code
+                    val errorMsg = when(errorCode) {
+                        401 -> "Chave da API inválida ou expirada."
+                        413 -> "Imagem grande demais para o serviço."
+                        429 -> "Limite de uso atingido. Tente em instantes."
+                        else -> "Erro no servidor Groq (Código $errorCode)."
+                    }
+                    Log.e("Groq", "Erro $errorCode: $body")
+                    callback(errorMsg)
                 }
             }
         })
     }
 
     private fun encodeImageToBase64(bitmap: Bitmap): String {
+        // Redução para 512px para máxima compatibilidade e velocidade
+        val maxDimension = 512 
+        val scale = if (bitmap.width > maxDimension || bitmap.height > maxDimension) {
+            Math.min(maxDimension.toFloat() / bitmap.width, maxDimension.toFloat() / bitmap.height)
+        } else 1.0f
+        
+        val finalBitmap = if (scale < 1.0f) {
+            Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
+        } else {
+            bitmap
+        }
+
         val outputStream = ByteArrayOutputStream()
-        // Redimensionar para economizar banda e tokens se necessário, 
-        // mas o Groq lida bem com imagens normais. Mantendo 70% qualidade.
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 70, outputStream)
+        // 40% de qualidade é o ideal para descrições de ambiente via Llama Vision
+        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 40, outputStream)
         val byteArray = outputStream.toByteArray()
         return Base64.encodeToString(byteArray, Base64.NO_WRAP)
     }

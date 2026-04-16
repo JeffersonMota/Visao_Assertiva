@@ -1,287 +1,189 @@
 package com.example.visao_pcd
 
+import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Rect
+import android.graphics.RectF
 import android.util.Log
-import com.google.android.gms.tasks.Tasks
-import com.google.mlkit.nl.translate.TranslateLanguage
-import com.google.mlkit.nl.translate.Translation
-import com.google.mlkit.nl.translate.TranslatorOptions
-import com.google.mlkit.common.model.LocalModel
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.label.ImageLabeling
-import com.google.mlkit.vision.label.custom.CustomImageLabelerOptions
-import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
-import com.google.mlkit.vision.objects.ObjectDetection
-import com.google.mlkit.vision.objects.DetectedObject
-import com.google.mlkit.vision.objects.custom.CustomObjectDetectorOptions
-import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
+import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.support.common.FileUtil
+import org.tensorflow.lite.support.common.ops.NormalizeOp
+import org.tensorflow.lite.support.image.ImageProcessor
+import org.tensorflow.lite.support.image.TensorImage
+import org.tensorflow.lite.support.image.ops.ResizeOp
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
 
-class ModoObjeto {
-    // Implementação de Detecção de Objetos (Substituindo Labeling para ter Bounding Boxes reais)
-    private val localModel = LocalModel.Builder()
-        .setAssetFilePath("detector.tflite")
-        .build()
+/**
+ * MODO OBJETO - VERSÃO FINAL ESTABILIZADA (PARA CEGOS)
+ */
+class ModoObjeto(private val context: Context) {
+    data class ResultadoObjeto(val boxes: List<OverlayView.BoxData>, val falas: List<String>)
+    private data class DetectionCandidate(val rect: RectF, val score: Float, val classIdx: Int)
 
-    private val objectDetector = ObjectDetection.getClient(
-        CustomObjectDetectorOptions.Builder(localModel)
-            .setDetectorMode(CustomObjectDetectorOptions.STREAM_MODE)
-            .enableMultipleObjects()
-            .enableClassification()
-            .setMaxPerObjectLabelCount(3)
-            .build()
-    )
+    private var interpreter: Interpreter? = null
+    private val translationManager = TranslationManager(context)
+    private val labels = mutableListOf<String>()
 
-    private val genericObjectDetector = ObjectDetection.getClient(
-        ObjectDetectorOptions.Builder()
-            .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
-            .enableMultipleObjects()
-            .enableClassification()
-            .build()
-    )
+    @Volatile var estaProcessando = false
+    private val lastAnnouncementTime = mutableMapOf<String, Long>()
+    
+    private val INTERVALO_FALA_REPETIDA = 10000L
+    private val CONFIDENCE_THRESHOLD = 0.65f
+    private val NMS_THRESHOLD = 0.35f
 
-    private val translatorOptions = TranslatorOptions.Builder()
-        .setSourceLanguage(TranslateLanguage.ENGLISH)
-        .setTargetLanguage(TranslateLanguage.PORTUGUESE)
-        .build()
-    private val translator = Translation.getClient(translatorOptions)
-    private var modelDownloaded = false
+    private var outputBuffers: Array<ByteBuffer>? = null
+    private var outputMap: MutableMap<Int, Any>? = null
+    private var boxesIdx = -1
+    private var scoresIdx = -1
 
     init {
-        translator.downloadModelIfNeeded()
-            .addOnSuccessListener { modelDownloaded = true }
-            .addOnFailureListener { Log.e("ModoObjeto", "Falha ao baixar tradutor", it) }
+        carregarLabels()
+        setupDetector()
     }
 
-    // Cache persistente durante a sessão
-    private val translationCache = mutableMapOf<String, String>().apply {
-        put("Home", "") // Ignora ambiente
-        put("House", "") // Ignora ambiente
-        put("Selfie", "") // Ignora selfies
+    private fun carregarLabels() {
+        labels.clear()
+        try {
+            val jsonString = context.assets.open("open_images_br.json").bufferedReader().use { it.readText() }
+            val regex = "\"([^\"]+)\":".toRegex()
+            labels.add("background") // Índice 0
+            labels.addAll(regex.findAll(jsonString).map { it.groupValues[1] })
+            Log.d("ModoObjeto", "Labels carregadas: ${labels.size}")
+        } catch (e: Exception) {
+            Log.e("ModoObjeto", "Erro labels: ${e.message}")
+        }
     }
-    private val objetosVistosRecentemente = mutableMapOf<String, Long>()
-    
-    // Intervalos reduzidos para ser mais responsivo (estilo Lookout)
-    private val INTERVALO_REPETICAO = 3000L // Reduzido de 5s para 3s para buscas ativas
-    private val INTERVALO_NOVO_OBJETO = 300L // Reduzido de 800ms para 300ms para resposta imediata
-    private var ultimoTempoAnuncioGlobal = 0L
 
-    data class ResultadoObjeto(
-        val boxes: List<OverlayView.BoxData>,
-        val falas: List<String>
-    )
+    private fun setupDetector() {
+        try {
+            val modelFile = FileUtil.loadMappedFile(context, "detector.tflite")
+            val interpOptions = Interpreter.Options().setNumThreads(4)
+            interpreter = Interpreter(modelFile, interpOptions)
+            
+            // Mapeamento automático baseado em shapes [1, N, 4] e [1, N, C]
+            val count = interpreter!!.outputTensorCount
+            outputBuffers = Array(count) { i ->
+                val tensor = interpreter!!.getOutputTensor(i)
+                val shape = tensor.shape()
+                if (shape.contains(4)) boxesIdx = i else scoresIdx = i
+                ByteBuffer.allocateDirect(tensor.numBytes()).order(ByteOrder.nativeOrder())
+            }
+            outputMap = mutableMapOf<Int, Any>().apply {
+                outputBuffers?.forEachIndexed { i, buf -> put(i, buf) }
+            }
+            Log.d("ModoObjeto", "Modelo pronto. BoxesIdx=$boxesIdx, ScoresIdx=$scoresIdx")
+        } catch (e: Exception) {
+            Log.e("ModoObjeto", "Erro no setup: ${e.message}")
+        }
+    }
 
-    fun processar(image: InputImage, imageWidth: Int, callback: (ResultadoObjeto) -> Unit) {
-        val agora = System.currentTimeMillis()
+    fun processar(bitmap: Bitmap, callback: (ResultadoObjeto) -> Unit) {
+        if (estaProcessando || interpreter == null) return
+        estaProcessando = true
         
-        // Usamos apenas o detector genérico para garantir estabilidade primeiro
-        // O detector customizado pode ser adicionado após validarmos que o genérico funciona
-        genericObjectDetector.process(image)
-            .addOnSuccessListener { genericResults ->
-                val boxesFinal = mutableListOf<OverlayView.BoxData>()
-                val falasFinais = mutableListOf<String>()
+        try {
+            val interp = interpreter!!
+            val inputTensor = interp.getInputTensor(0)
+            val h = inputTensor.shape()[1]
+            val w = inputTensor.shape()[2]
+            
+            val tensorImage = TensorImage(inputTensor.dataType())
+            tensorImage.load(bitmap)
+            val processor = ImageProcessor.Builder()
+                .add(ResizeOp(h, w, ResizeOp.ResizeMethod.BILINEAR))
+                .add(NormalizeOp(127.5f, 127.5f))
+                .build()
+            
+            val inputBuffer = processor.process(tensorImage).buffer
+            outputBuffers?.forEach { it.rewind() }
+            interp.runForMultipleInputsOutputs(arrayOf(inputBuffer), outputMap!!)
+            
+            val boxBuf = outputBuffers!![boxesIdx].asFloatBuffer()
+            val scoreBuf = outputBuffers!![scoresIdx].asFloatBuffer()
+            boxBuf.rewind()
+            scoreBuf.rewind()
 
-                for (obj in genericResults) {
-                    val bestLabel = obj.labels.maxByOrNull { it.confidence }
-                    val rawName = bestLabel?.text ?: ""
-                    val confidence = bestLabel?.confidence ?: 0f
-                    
-                    // Se não houver label, mas houver objeto, chamamos de "Objeto"
-                    var nomeFinal = if (rawName.isNotBlank() && confidence > 0.4f) {
-                        getTranslation(rawName)
-                    } else {
-                        "Objeto"
+            val boxesShape = interp.getOutputTensor(boxesIdx).shape()
+            val scoresShape = interp.getOutputTensor(scoresIdx).shape()
+            
+            val numAnchors = boxesShape.first { it > 100 } // Geralmente 1917 ou similar
+            val numClasses = scoresShape.last()
+            
+            val candidates = mutableListOf<DetectionCandidate>()
+            for (i in 0 until numAnchors) {
+                var maxScore = 0f
+                var maxClass = -1
+                for (c in 1 until numClasses) { 
+                    val s = scoreBuf.get(i * numClasses + c)
+                    if (s > maxScore) {
+                        maxScore = s
+                        maxClass = c
                     }
+                }
 
-                    if (nomeFinal.isNotBlank()) {
-                        boxesFinal.add(OverlayView.BoxData(obj.boundingBox, nomeFinal))
-
-                        // Lógica de fala:
-                        if (agora - (objetosVistosRecentemente[nomeFinal] ?: 0L) > INTERVALO_REPETICAO) {
-                            if (agora - ultimoTempoAnuncioGlobal > INTERVALO_NOVO_OBJETO) {
-                                falasFinais.add(nomeFinal)
-                                objetosVistosRecentemente[nomeFinal] = agora
-                                ultimoTempoAnuncioGlobal = agora
-                            }
+                if (maxScore > CONFIDENCE_THRESHOLD) {
+                    val y1 = boxBuf.get(i * 4)
+                    val x1 = boxBuf.get(i * 4 + 1)
+                    val y2 = boxBuf.get(i * 4 + 2)
+                    val x2 = boxBuf.get(i * 4 + 3)
+                    
+                    // Filtro de artefatos visuais (linhas presas em 0,0 ou bordas)
+                    if (y1 > 0.01f && x1 > 0.01f && y2 < 0.99f && x2 < 0.99f) {
+                        val rect = RectF(x1.coerceIn(0f, 1f), y1.coerceIn(0f, 1f), x2.coerceIn(0f, 1f), y2.coerceIn(0f, 1f))
+                        // Filtro de tamanho mínimo para evitar ruído de fundo (15% da tela)
+                        if (rect.width() > 0.15f && rect.height() > 0.15f) {
+                            candidates.add(DetectionCandidate(rect, maxScore, maxClass))
                         }
                     }
                 }
-                callback(ResultadoObjeto(boxesFinal, falasFinais))
             }
-            .addOnFailureListener { e ->
-                Log.e("ModoObjeto", "Erro na detecção genérica", e)
-                callback(ResultadoObjeto(emptyList(), emptyList()))
-            }
-    }
 
-    // Função para gerar um resumo inteligente da cena usando o Ollama
-    fun descreverCenaComOllama(boxes: List<OverlayView.BoxData>, ollama: OllamaService, callback: (String) -> Unit) {
-        if (boxes.isEmpty()) return
-        
-        val objetosUnicos = boxes.mapNotNull { it.label }.distinct().joinToString(", ")
-        if (objetosUnicos.isBlank()) return
+            val nms = applyNMS(candidates)
+            val boxesFinal = mutableListOf<OverlayView.BoxData>()
+            val falasFinal = mutableListOf<String>()
+            val agora = System.currentTimeMillis()
 
-        val prompt = "Estou vendo os seguintes objetos em Português: $objetosUnicos. " +
-                     "Descreva de forma natural e muito curta o que parece ser este ambiente."
-        
-        ollama.gerarDescricao(prompt, callback)
-    }
-
-    private fun getTranslation(rawName: String): String {
-        if (rawName.isBlank()) return ""
-
-        // 1. Verificamos o Cache
-        translationCache[rawName]?.let { if (it.isBlank()) return "" else return it }
-
-        // 2. Se não estiver no cache, tentamos o tradutor manual rápido
-        val manual = manualTranslate(rawName)
-        
-        // Se a tradução manual retornou algo diferente do original (ignorando case), é porque traduziu
-        if (!manual.equals(rawName, ignoreCase = true)) {
-            return manual
-        }
-
-        // Termos técnicos aceitos
-        val termosAceitos = listOf("mouse", "notebook", "laptop", "tablet", "joystick", "smartphone")
-        if (rawName.lowercase() in termosAceitos) {
-            return rawName.replaceFirstChar { it.uppercase() }
-        }
-
-        // 3. Disparamos a tradução do Google em background
-        if (modelDownloaded) {
-            translator.translate(rawName).addOnSuccessListener { traduzido ->
-                val fixed = fixTranslation(traduzido)
-                if (fixed.isNotBlank()) {
-                    translationCache[rawName] = fixed
+            nms.forEach { det ->
+                val labelRaw = labels.getOrNull(det.classIdx) ?: "objeto"
+                val traduzido = translationManager.getTranslation(labelRaw)
+                val rect = Rect(
+                    (det.rect.left * bitmap.width).toInt(), (det.rect.top * bitmap.height).toInt(),
+                    (det.rect.right * bitmap.width).toInt(), (det.rect.bottom * bitmap.height).toInt()
+                )
+                boxesFinal.add(OverlayView.BoxData(rect, traduzido))
+                
+                if (agora - (lastAnnouncementTime[traduzido] ?: 0L) > INTERVALO_FALA_REPETIDA) {
+                    falasFinal.add(traduzido)
+                    lastAnnouncementTime[traduzido] = agora
                 }
             }
-        }
-
-        // Se não houver tradução manual, retorna o original temporariamente 
-        // em vez de vazio, para não "sumir" com o objeto da tela.
-        return rawName
-    }
-
-    private fun fixTranslation(texto: String): String {
-        val t = texto.lowercase()
-        return when {
-            t.contains("computador portátil") || t.contains("computador portatil") -> "Notebook"
-            t.contains("mouse de computador") -> "Mouse"
-            t.contains("telefone celular") -> "Celular"
-            t.contains("unidade de exibição") -> "Monitor ou TV"
-            t.contains("calçado") -> "Sapato"
-            t.contains("instrumento musical") -> "" // Ignora se vier do tradutor sem contexto
-            else -> texto
+            callback(ResultadoObjeto(boxesFinal, falasFinal))
+        } catch (e: Exception) {
+            Log.e("ModoObjeto", "Erro: ${e.message}")
+        } finally {
+            estaProcessando = false
         }
     }
 
-    private fun manualTranslate(label: String): String {
-        val l = label.lowercase()
-        
-        // Bloqueio explícito de termos indesejados, genéricos e partes do corpo
-        if (l.contains("home") || l.contains("house") || l.contains("selfie") || 
-            l.contains("toy") || l.contains("room") || l.contains("indoor") || 
-            l.contains("furniture") || l.contains("good") || l.contains("well") || 
-            l.contains("nice") || l.contains("hand") || l.contains("finger") || 
-            l.contains("nail") || l.contains("arm") || l.contains("leg")) return ""
-
-        return when {
-            l.contains("metal") || l.contains("steel") || l.contains("iron") -> "" // Bloqueia anúncios genéricos de material
-
-            // Eletrônicos
-            l.contains("laptop") || l.contains("notebook") -> "Notebook"
-            l.contains("mouse") -> "Mouse"
-            l.contains("phone") || l.contains("cellular") || l.contains("mobile") -> "Celular"
-            l.contains("keyboard") -> "Teclado"
-            l.contains("monitor") || l.contains("screen") || l.contains("display") -> "Monitor"
-            l.contains("television") || l.contains("tv") -> "Televisão"
-            l.contains("remote") || l.contains("control") -> "Controle remoto"
-            l.contains("camera") -> "Câmera"
-            l.contains("headphones") -> "Fone de ouvido"
-            l.contains("router") || l.contains("modem") -> "Roteador"
-            l.contains("air conditioner") -> "Ar Condicionado"
-            
-            // Mobiliário (Threshold maior para mesa para evitar confusão com pequenos objetos)
-            l.contains("chair") -> "Cadeira"
-            l.contains("table") || l.contains("desk") -> {
-                // Vidros de perfume e pequenos objetos costumam estar SOBRE a mesa, 
-                // e o ML Kit às vezes confunde o suporte com a mesa.
-                // Se o rótulo for puramente 'table', ignoramos em favor de labels mais específicos do detector global
-                "" 
+    private fun applyNMS(detections: List<DetectionCandidate>): List<DetectionCandidate> {
+        val sorted = detections.sortedByDescending { it.score }
+        val selected = mutableListOf<DetectionCandidate>()
+        for (candidate in sorted) {
+            var keep = true
+            for (sel in selected) {
+                if (calculateIoU(candidate.rect, sel.rect) > NMS_THRESHOLD) { keep = false; break }
             }
-            l.contains("door") -> "Porta"
-            l.contains("window") -> "Janela"
-            l.contains("bed") -> "Cama"
-            l.contains("couch") || l.contains("sofa") -> "Sofá"
-            l.contains("cabinet") || l.contains("cupboard") -> "Armário"
-            l.contains("shelf") -> "Prateleira"
-            
-            // Itens comuns de casa
-            l.contains("bottle") || l.contains("perfume") || l.contains("cosmetics") -> "Frasco ou Garrafa"
-            l.contains("speaker") || l.contains("audio equipment") -> "Caixa de som"
-            l.contains("cup") || l.contains("glass") || l.contains("mug") -> "Copo"
-            l.contains("plate") -> "Prato"
-            l.contains("spoon") -> "Colher"
-            l.contains("fork") -> "Garfo"
-            l.contains("knife") -> "Faca"
-            l.contains("bowl") -> "Tigela"
-            l.contains("backpack") || l.contains("bag") || l.contains("handbag") -> "Mochila ou bolsa"
-            l.contains("wallet") -> "Carteira"
-            l.contains("key") || l.contains("chain") -> "Chave"
-            l.contains("umbrella") -> "Guarda-chuva"
-            l.contains("clock") || l.contains("watch") -> "Relógio"
-            l.contains("mirror") -> "Espelho"
-            l.contains("toothbrush") -> "Escova de dentes"
-            l.contains("toothpaste") -> "Pasta de dentes"
-            l.contains("soap") -> "Sabonete"
-            l.contains("towel") -> "Toalha"
-            l.contains("comb") -> "Pente ou escova"
-            l.contains("scissors") -> "Tesoura"
-            
-            // Cozinha
-            l.contains("microwave") -> "Micro-ondas"
-            l.contains("refrigerator") || l.contains("fridge") -> "Geladeira"
-            l.contains("oven") || l.contains("stove") -> "Fogão ou Forno"
-            l.contains("blender") -> "Liquidificador"
-            l.contains("kettle") -> "Chaleira"
-            l.contains("toaster") -> "Torradeira"
-            l.contains("coffee maker") || l.contains("coffeemaker") -> "Cafeteira"
-            l.contains("sink") -> "Pia"
-            l.contains("pot") || l.contains("pan") -> "Panela"
-            
-            // Limpeza
-            l.contains("broom") -> "Vassoura"
-            l.contains("bucket") -> "Balde"
-            l.contains("vacuum") -> "Aspirador de pó"
-            l.contains("trash can") || l.contains("garbage") || l.contains("waste container") -> "Lixeira"
-            
-            // Higiene e Objetos de Risco (Gilete/Barbeador)
-            l.contains("razor") || l.contains("shaver") || l.contains("blade") -> "Aparelho de barbear"
-            l.contains("safety razor") -> "Gilete"
-            
-            // Escritório e Diversos
-            l.contains("book") -> "Livro"
-            l.contains("pen") || l.contains("pencil") -> "Caneta"
-            l.contains("paper") -> "Papel"
-            l.contains("box") -> "Caixa"
-            l.contains("tool") -> "Ferramenta"
-            
-            // Seres e Vestuário
-            l.contains("person") || l.contains("man") || l.contains("woman") || l.contains("boy") || l.contains("girl") -> "Pessoa"
-            l.contains("cat") -> "Gato"
-            l.contains("dog") -> "Cachorro"
-            l.contains("shoe") || l.contains("footwear") || l.contains("sneaker") -> "Sapato"
-            l.contains("glasses") || l.contains("sunglasses") -> "Óculos"
-            l.contains("hat") || l.contains("cap") -> {
-                // Se detectar 'hat' mas houver indícios de eletrônicos, pode ser uma caixa de som redonda
-                if (l.contains("audio") || l.contains("electronic")) "Caixa de som" else "Chapéu"
-            }
-
-            // Genéricos do ML Kit Object Detection
-            l.contains("home appliance") -> "Eletrodoméstico"
-            l.contains("fashion good") -> "Acessório ou vestuário"
-            l.contains("food") -> "Alimento"
-
-            else -> label
+            if (keep) { selected.add(candidate); if (selected.size >= 3) break }
         }
+        return selected
+    }
+
+    private fun calculateIoU(a: RectF, b: RectF): Float {
+        val inter = RectF(); if (!inter.setIntersect(a, b)) return 0f
+        val interArea = inter.width() * inter.height()
+        val unionArea = (a.width() * a.height()) + (b.width() * b.height()) - interArea
+        return interArea / unionArea
     }
 }

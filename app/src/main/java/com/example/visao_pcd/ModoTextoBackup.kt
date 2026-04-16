@@ -8,11 +8,14 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
-class ModoTexto {
+/**
+ * BACKUP DE SEGURANÇA - MODO TEXTO (VERSÃO ESTÁVEL)
+ * Por favor, não modifique este arquivo.
+ */
+class ModoTextoBackup {
     private val textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     
     private var textStabilityCounter = 0
-    private var lastTextContent = ""
 
     interface Callback {
         fun onEscaneando()
@@ -33,7 +36,6 @@ class ModoTexto {
                 callback.onTextoDetectado(detectedText, boxes)
 
                 if (detectedText.length > 5) {
-                    // Exige que o texto seja detectado por 3 frames antes de bater a foto
                     textStabilityCounter++
                     if (textStabilityCounter >= 3) {
                         callback.onCapturarAltaQualidade()
@@ -47,17 +49,11 @@ class ModoTexto {
                 }
             }
             .addOnFailureListener {
-                Log.e("ModoTexto", "Erro no processamento de texto", it)
                 callback.onError(it)
             }
     }
 
-    /**
-     * Processa a imagem em alta qualidade, garantindo que a foto esteja na vertical
-     * e o texto seja limpo para uma leitura fluida (sem soletrar).
-     */
     fun processarAltaQualidade(bitmap: Bitmap, callback: (String, Bitmap) -> Unit) {
-        // 1. Força a imagem a ficar na vertical (Portrait)
         val orientedBitmap = if (bitmap.width > bitmap.height) {
             val matrix = Matrix()
             matrix.postRotate(90f)
@@ -75,7 +71,6 @@ class ModoTexto {
                     return@addOnSuccessListener
                 }
 
-                // 2. Limpeza para leitura humanizada (remove quebras de linha e espaços extras)
                 val cleanText = rawText
                     .replace("\n", " ")
                     .replace(Regex("\\s+"), " ")
@@ -84,7 +79,6 @@ class ModoTexto {
                 callback(if (cleanText.length < 3) "Texto muito curto para ler com precisão." else cleanText, orientedBitmap)
             }
             .addOnFailureListener {
-                Log.e("ModoTexto", "Erro no processamento de alta qualidade", it)
                 callback("Erro ao processar a imagem.", orientedBitmap)
             }
     }

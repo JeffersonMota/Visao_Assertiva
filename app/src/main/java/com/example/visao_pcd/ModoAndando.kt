@@ -1,14 +1,13 @@
 package com.example.visao_pcd
 
 import android.graphics.Bitmap
-import com.google.mlkit.vision.common.InputImage
 
 class ModoAndando(private val modoObjeto: ModoObjeto, private val groqService: GroqService) {
 
-    fun processar(image: InputImage, imageWidth: Int, imageHeight: Int, callback: (Boolean) -> Unit) {
-        modoObjeto.processar(image, imageWidth) { resultado ->
+    fun processar(bitmap: Bitmap, callback: (Boolean) -> Unit) {
+        modoObjeto.processar(bitmap) { resultado ->
             val hasObstacle = resultado.boxes.any { 
-                val areaPercent = (it.rect.width() * it.rect.height()).toFloat() / (imageWidth * imageHeight)
+                val areaPercent = (it.rect.width() * it.rect.height()).toFloat() / (bitmap.width * bitmap.height)
                 areaPercent > 0.35
             }
             callback(hasObstacle)

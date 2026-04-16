@@ -30,9 +30,9 @@ abstract class ModoActivity : AppCompatActivity() {
         ollamaService = OllamaService()
 
         modoCor = ModoCor()
-        modoObjeto = ModoObjeto()
+        modoObjeto = ModoObjeto(this)
         modoTexto = ModoTexto()
-        modoDinheiro = ModoDinheiro()
+        modoDinheiro = ModoDinheiro(this)
         
         modoAmbiente = ModoAmbiente(groqService)
         modoAndando = ModoAndando(modoObjeto, groqService)
