@@ -8,7 +8,7 @@ class ModoAndando(private val modoObjeto: ModoObjeto, private val groqService: G
         modoObjeto.processar(bitmap) { resultado ->
             val hasObstacle = resultado.boxes.any { 
                 val areaPercent = (it.rect.width() * it.rect.height()).toFloat() / (bitmap.width * bitmap.height)
-                areaPercent > 0.35
+                areaPercent > 0.20 // Reduzido de 0.35 para 0.20 para ser mais sensível
             }
             callback(hasObstacle)
         }

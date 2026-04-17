@@ -49,6 +49,12 @@ class ModoMicroondas(private val groqService: GroqService) {
         groqService.analisarImagem(bitmap, prompt) { responseText ->
             isAnalyzing = false
             Log.d("ModoMicroondas", "Resposta do Groq: $responseText")
+            
+            if (responseText.startsWith("Erro:")) {
+                callback(emptyList())
+                return@analisarImagem
+            }
+
             val cleanJson = responseText.replace("```json", "").replace("```", "").trim()
             val novosBotoes = parseBotoes(cleanJson, bitmap.width, bitmap.height)
             
@@ -57,8 +63,7 @@ class ModoMicroondas(private val groqService: GroqService) {
                 callback(novosBotoes)
             } else {
                 Log.e("ModoMicroondas", "Nenhum botão detectado no JSON")
-                // Se falhou mas temos antigos, podemos retornar os antigos como fallback?
-                // Por enquanto apenas logamos.
+                callback(emptyList())
             }
         }
     }

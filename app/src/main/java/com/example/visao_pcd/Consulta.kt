@@ -21,10 +21,12 @@ data class Consulta(
 @Dao
 interface ConsultaDao {
     @Insert
-    fun salvar(consulta: Consulta): Long
+    @JvmSuppressWildcards
+    suspend fun salvar(consulta: Consulta): Long
 
     @Query("SELECT * FROM historico_consultas ORDER BY data DESC LIMIT 50")
-    fun listarUltimas(): List<Consulta>
+    @JvmSuppressWildcards
+    suspend fun listarUltimas(): List<Consulta>
 
     @Query("DELETE FROM historico_consultas")
     fun limparTudo(): Int

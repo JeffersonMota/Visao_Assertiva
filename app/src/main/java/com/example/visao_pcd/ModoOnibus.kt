@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.BitmapDrawable
 import android.location.Location
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -40,37 +41,61 @@ class ModoOnibus(
     )
 
     val customStops = mutableListOf<GtfsStop>()
+    private val allNearbyStops = mutableListOf<GtfsStop>()
+    private var lastAnnouncedLocation = ""
+    private var lastAnnouncedStopId = ""
 
     fun buscarParadasGoogle(mapView: MapView, onFalar: (String) -> Unit) {
-        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            onFalar("Erro: Sem permissão de localização.")
+            return
+        }
 
         fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-            if (location == null) return@addOnSuccessListener
+            if (location == null) {
+                onFalar("Erro: GPS desativado ou sem sinal.")
+                return@addOnSuccessListener
+            }
 
             val url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${location.latitude},${location.longitude}&radius=1500&type=bus_station&key=$googleMapsKey"
             
             client.newCall(Request.Builder().url(url).build()).enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {}
+                override fun onFailure(call: Call, e: IOException) {
+                    onFalar("Erro de conexão ao buscar paradas.")
+                }
                 override fun onResponse(call: Call, response: Response) {
                     val body = response.body?.string() ?: ""
                     val googleStops = mutableListOf<GtfsStop>()
                     try {
-                        val results = JSONObject(body).getJSONArray("results")
+                        val json = JSONObject(body)
+                        if (json.has("error_message")) {
+                            Log.e("ModoOnibus", "Google API Error: ${json.getString("error_message")}")
+                        }
+                        
+                        val results = json.optJSONArray("results")
+                        if (results == null || results.length() == 0) {
+                            onFalar("Nenhuma parada de ônibus encontrada por perto.")
+                            return
+                        }
+
                         for (i in 0 until results.length()) {
                             val obj = results.getJSONObject(i)
                             val loc = obj.getJSONObject("geometry").getJSONObject("location")
                             googleStops.add(GtfsStop(obj.getString("place_id"), obj.getString("name"), loc.getDouble("lat"), loc.getDouble("lng"), "Google"))
                         }
                         
-                        googleStops.addAll(customStops)
+                        allNearbyStops.clear()
+                        allNearbyStops.addAll(googleStops)
+                        allNearbyStops.addAll(customStops)
                         
                         scope.launch(Dispatchers.Main) {
-                            adicionarMarcadores(mapView, googleStops)
+                            adicionarMarcadores(mapView, allNearbyStops)
                             orientarComGroq(location, googleStops, mapView, onFalar)
                             mapView.controller.animateTo(GeoPoint(location.latitude, location.longitude))
                         }
                     } catch (e: Exception) {
-                        onFalar("Erro ao processar paradas do Google.")
+                        Log.e("ModoOnibus", "Erro parse: ${e.message}")
+                        onFalar("Erro ao processar dados das paradas.")
                     }
                 }
             })
@@ -86,7 +111,7 @@ class ModoOnibus(
         val listStops = stops.take(3).joinToString { "${it.name} em ${it.lat},${it.lon}" }
         val prompt = "Você é um guia para deficientes visuais em Manaus. Minha localização: ${userLoc.latitude}, ${userLoc.longitude}. Paradas próximas encontradas: [$listStops]. Forneça uma instrução curta e direta (máximo 20 palavras) de como chegar na parada mais próxima usando pontos cardeais ou referências simples."
 
-        groqService.analisarImagemSemBitmap(prompt) { responseText ->
+        groqService.analisarImagemSemBitmap(prompt) { responseText: String ->
             scope.launch(Dispatchers.Main) {
                 onFalar(responseText)
                 buscarRota(LatLng(userLoc.latitude, userLoc.longitude), LatLng(stops[0].lat, stops[0].lon), mapView)
@@ -192,6 +217,42 @@ class ModoOnibus(
                 val all = (prefs.getString("stops", "") ?: "") + "${stop.id};${stop.name};${stop.lat};${stop.lon}|"
                 prefs.edit().putString("stops", all).apply()
                 onFalar("Ponto salvo com sucesso.")
+            }
+        }
+    }
+
+    fun monitorarTrajeto(onFalar: (String) -> Unit) {
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
+        
+        fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+            location?.let { loc ->
+                // 1. Verificar se está passando por uma parada conhecida (raio de 60m)
+                val nearbyStop = allNearbyStops.find { stop ->
+                    val results = FloatArray(1)
+                    Location.distanceBetween(loc.latitude, loc.longitude, stop.lat, stop.lon, results)
+                    results[0] < 60 
+                }
+                
+                if (nearbyStop != null && nearbyStop.id != lastAnnouncedStopId) {
+                    lastAnnouncedStopId = nearbyStop.id
+                    onFalar("Passando pela parada: ${nearbyStop.name}")
+                    return@addOnSuccessListener
+                }
+
+                // 2. Anunciar a rua atual (Geocoder)
+                val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+                try {
+                    val addresses = geocoder.getFromLocation(loc.latitude, loc.longitude, 1)
+                    if (addresses?.isNotEmpty() == true) {
+                        val rua = addresses[0].thoroughfare ?: addresses[0].subLocality ?: ""
+                        if (rua.isNotEmpty() && rua != lastAnnouncedLocation) {
+                            lastAnnouncedLocation = rua
+                            onFalar("Você está na $rua")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("ModoOnibus", "Erro no monitoramento: ${e.message}")
+                }
             }
         }
     }

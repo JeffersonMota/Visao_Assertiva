@@ -402,6 +402,22 @@
         app:layout_constraintBottom_toBottomOf="parent"
         android:elevation="15dp"/>
 
+    <!-- Contagem Regressiva -->
+    <TextView
+        android:id="@+id/tvCountdown"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="5"
+        android:textColor="#FFEB3B"
+        android:textSize="120sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        android:elevation="50dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <!-- Tela de Resultado -->
     <FrameLayout
         android:id="@+id/resultLayout"

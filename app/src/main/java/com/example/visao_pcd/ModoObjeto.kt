@@ -30,7 +30,7 @@ class ModoObjeto(private val context: Context) {
     private val lastAnnouncementTime = mutableMapOf<String, Long>()
     
     private val INTERVALO_FALA_REPETIDA = 10000L
-    private val CONFIDENCE_THRESHOLD = 0.65f
+    private val CONFIDENCE_THRESHOLD = 0.50f
     private val NMS_THRESHOLD = 0.35f
 
     private var outputBuffers: Array<ByteBuffer>? = null
@@ -132,10 +132,7 @@ class ModoObjeto(private val context: Context) {
                     // Filtro de artefatos visuais (linhas presas em 0,0 ou bordas)
                     if (y1 > 0.01f && x1 > 0.01f && y2 < 0.99f && x2 < 0.99f) {
                         val rect = RectF(x1.coerceIn(0f, 1f), y1.coerceIn(0f, 1f), x2.coerceIn(0f, 1f), y2.coerceIn(0f, 1f))
-                        // Filtro de tamanho mínimo para evitar ruído de fundo (15% da tela)
-                        if (rect.width() > 0.15f && rect.height() > 0.15f) {
-                            candidates.add(DetectionCandidate(rect, maxScore, maxClass))
-                        }
+                        candidates.add(DetectionCandidate(rect, maxScore, maxClass))
                     }
                 }
             }

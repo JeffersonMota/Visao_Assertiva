@@ -2,7 +2,11 @@ package com.example.visao_pcd
 
 import android.graphics.Bitmap
 
-class ModoAmbiente(private val groqService: GroqService) {
+/**
+ * BACKUP DE SEGURANÇA - VERSÃO ESTÁVEL 1.0
+ * ESTE ARQUIVO NÃO DEVE SER ALTERADO.
+ */
+class ModoAmbiente_Backup(private val groqService: GroqService) {
 
     fun processar(bitmap: Bitmap, callback: (String) -> Unit) {
         val prompt = """

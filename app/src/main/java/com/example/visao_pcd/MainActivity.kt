@@ -8,9 +8,13 @@ import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.speech.tts.TextToSpeech
 import android.util.Log
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.View
-import android.widget.Toast
+import android.widget.ImageView
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -19,28 +23,21 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.visao_pcd.databinding.ActivityMainBinding
-import com.google.mlkit.vision.common.InputImage
-import kotlinx.coroutines.Dispatchers
+import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import org.osmdroid.config.Configuration
+import java.util.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import android.speech.tts.TextToSpeech
-import java.util.Locale
-import com.google.android.gms.location.LocationServices
-import okhttp3.OkHttpClient
-import android.view.GestureDetector
-import android.view.MotionEvent
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraExecutor: ExecutorService
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var camera: Camera? = null
-    
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
+    private var cameraProvider: ProcessCameraProvider? = null
 
     private lateinit var modoObjeto: ModoObjeto
     private lateinit var modoTexto: ModoTexto
@@ -58,14 +55,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private var currentAppMode = AppMode.NENHUM
     private var isListeningVoiceCommand = false
-    private var isAwaitingHighQualityCapture = false
     private var isAnalyzingAmbiente = false
     private var isAnalyzingPessoa = false
     private var isAnalyzingRoupa = false
-    private var lastDetectedObject = ""
     
     private var lastColorAnalysisTime = 0L
     private var lastCloudAnalysisTime = 0L
+    private var lastAmbienteAnalysisTime = 0L
+    private var lastAndandoAnalysisTime = 0L
     
     private var microondasHelper: ModoMicroondas.MicroondasTouchHelper? = null
     
@@ -76,6 +73,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        Configuration.getInstance().userAgentValue = packageName
+        Configuration.getInstance().load(this, getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+        
+        binding.mapOsm.setTileSource(org.osmdroid.tileprovider.tilesource.TileSourceFactory.MAPNIK)
+        binding.mapOsm.setMultiTouchControls(true)
+        binding.mapOsm.controller.setZoom(18.0)
+        binding.mapOsm.setBuiltInZoomControls(false)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         tts = TextToSpeech(this, this)
@@ -90,50 +95,76 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         modoAndando = ModoAndando(modoObjeto, groqService)
         modoPessoa = ModoPessoa(groqService)
         modoRoupa = ModoRoupa(groqService)
-        modoOnibus = ModoOnibus(
-            this,
-            com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(this),
-            okhttp3.OkHttpClient(),
-            groqService,
-            lifecycleScope,
-            "AIzaSyCOp2I7jfprHoqYT-D4ZEs9lwbcEoajOOI"
-        )
+        modoOnibus = ModoOnibus(this, LocationServices.getFusedLocationProviderClient(this), OkHttpClient(), groqService, lifecycleScope, "AIzaSyCOp2I7jfprHoqYT-D4ZEs9lwbcEoajOOI")
         modoMicroondas = ModoMicroondas(groqService)
         modoAmbiente = ModoAmbiente(groqService)
 
-        voiceCommandHelper = VoiceCommandHelper(this, { comando ->
-            processarComandoVoz(comando)
-        }, { isListening ->
+        voiceCommandHelper = VoiceCommandHelper(this, { processarComandoVoz(it) }, { isListening ->
             isListeningVoiceCommand = isListening
             if (isListening) falar("Ouvindo...", force = true)
         }, tts)
 
         gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if (currentAppMode == AppMode.AMBIENTE && !isAnalyzingAmbiente) {
+                    isAnalyzingAmbiente = true
+                    val bitmap = binding.viewFinder.bitmap
+                    if (bitmap != null) {
+                        runOnUiThread { iniciarContagemRegressivaAmbiente(bitmap) }
+                    }
+                    return true
+                } else if (currentAppMode == AppMode.PESSOA && !isAnalyzingPessoa) {
+                    isAnalyzingPessoa = true
+                    val bitmap = binding.viewFinder.bitmap
+                    if (bitmap != null) {
+                        runOnUiThread { iniciarContagemRegressivaPessoa(bitmap) }
+                    }
+                    return true
+                } else if (currentAppMode == AppMode.ROUPA && !isAnalyzingRoupa) {
+                    isAnalyzingRoupa = true
+                    val bitmap = binding.viewFinder.bitmap
+                    if (bitmap != null) {
+                        runOnUiThread { iniciarContagemRegressivaRoupa(bitmap) }
+                    }
+                    return true
+                }
+                return false
+            }
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                voiceCommandHelper.startListening()
+                // Ao dar dois toques, voltamos ao menu principal (atalho de navegação)
+                runOnUiThread {
+                    voltarAoMenuPrincipal()
+                }
                 return true
             }
         })
 
-        if (allPermissionsGranted()) {
-            startCamera()
-        } else {
-            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
-        }
+        if (allPermissionsGranted()) startCamera()
+        else ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
 
         setupButtons()
     }
 
+    override fun onResume() {
+        super.onResume()
+        binding.mapOsm.onResume()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        binding.mapOsm.onPause()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cameraExecutor.shutdown()
+        tts?.stop()
+        tts?.shutdown()
+    }
+
     private fun setupButtons() {
-        // Interação global por 2 toques, mas mantemos botões para acessibilidade padrão
-        binding.viewFinder.setOnTouchListener { _, event ->
-            gestureDetector.onTouchEvent(event)
-            true
-        }
-        binding.overlayView.setOnTouchListener { _, event ->
-            gestureDetector.onTouchEvent(event)
-            true
-        }
+        binding.viewFinder.setOnTouchListener { _, event -> gestureDetector.onTouchEvent(event); true }
+        binding.overlayView.setOnTouchListener { _, event -> gestureDetector.onTouchEvent(event); true }
         
         binding.menuBtnObjetos.setOnClickListener { switchMode(AppMode.OBJETOS) }
         binding.menuBtnTexto.setOnClickListener { switchMode(AppMode.TEXTO) }
@@ -154,78 +185,83 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         binding.toolbar.setNavigationOnClickListener {
-            currentAppMode = AppMode.NENHUM
-            binding.mainMenu.visibility = View.VISIBLE
-            binding.appBar.visibility = View.GONE
-            binding.resultLayout.visibility = View.GONE
-            binding.ivCapturedImage.visibility = View.GONE
-            binding.tvLiveTextFeedback.visibility = View.GONE
-            binding.overlayView.updateMode(AppMode.NENHUM)
-            binding.overlayView.updateBoundingBoxes(emptyList())
-            falar("Menu principal")
+            voltarAoMenuPrincipal()
         }
-        
-        // binding.btnHistorico.setOnClickListener { lerHistorico() }
+    }
+
+    private fun voltarAoMenuPrincipal() {
+        currentAppMode = AppMode.NENHUM
+        binding.mainMenu.visibility = View.VISIBLE
+        binding.appBar.visibility = View.GONE
+        binding.resultLayout.visibility = View.GONE
+        binding.ivCapturedImage.visibility = View.GONE
+        binding.tvLiveTextFeedback.visibility = View.GONE
+        binding.mapOsm.visibility = View.GONE
+        binding.navPanel.visibility = View.GONE
+        binding.overlayView.updateMode(AppMode.NENHUM)
+        binding.overlayView.updateBoundingBoxes(emptyList())
+        resetFlags()
+        falar("Menu principal", force = true)
+    }
+
+    private fun resetFlags() {
+        isAnalyzingAmbiente = false
+        isAnalyzingPessoa = false
+        isAnalyzingRoupa = false
+        lastColorAnalysisTime = 0L
+        lastCloudAnalysisTime = 0L
+        lastAmbienteAnalysisTime = 0L
+        lastAndandoAnalysisTime = 0L
+        binding.tvCountdown.visibility = View.GONE
     }
 
     private fun switchMode(mode: AppMode) {
         currentAppMode = mode
+        resetFlags() 
         binding.mainMenu.visibility = View.GONE
         binding.appBar.visibility = View.VISIBLE
         binding.overlayView.updateMode(mode)
         binding.resultLayout.visibility = View.GONE
         binding.ivCapturedImage.visibility = View.GONE
         binding.tvLiveTextFeedback.visibility = View.GONE
-        
-        if (mode == AppMode.MICROONDAS) {
-            ViewCompat.setAccessibilityDelegate(binding.overlayView, null)
-            microondasHelper = null
+
+        if (mode == AppMode.AMBIENTE) {
+            lastAmbienteAnalysisTime = Long.MAX_VALUE // Evita análise automática
+            falar("Modo ambiente ativado. Toque uma vez na tela para descrever o local.", force = true)
+        } else if (mode == AppMode.PESSOA) {
+            lastCloudAnalysisTime = 0L
+            falar("Modo pessoa. Identificando agora.", force = true)
+        } else if (mode == AppMode.ONIBUS) {
+            binding.mapOsm.visibility = View.VISIBLE
+            binding.navPanel.visibility = View.VISIBLE
+            binding.mapOsm.invalidate()
+            falar("Modo ônibus ativado. Buscando paradas próximas...", force = true)
+            modoOnibus.buscarParadasGoogle(binding.mapOsm) { falar(it, force = true) }
+        } else {
+            binding.mapOsm.visibility = View.GONE
+            binding.navPanel.visibility = View.GONE
+            val nomeModo = when(mode) {
+                AppMode.OBJETOS -> "objetos"; AppMode.TEXTO -> "texto"; AppMode.DINHEIRO -> "dinheiro"
+                AppMode.COR -> "cores"; AppMode.ANDANDO -> "andando"; AppMode.PESSOA -> "pessoa"
+                AppMode.ROUPA -> "roupa"; AppMode.ONIBUS -> "ônibus"; AppMode.MICROONDAS -> "micro-ondas"
+                else -> "nenhum"
+            }
+            falar("Modo $nomeModo ativado", force = true)
         }
-        
-        val nomeModo = when(mode) {
-            AppMode.OBJETOS -> "objetos"
-            AppMode.TEXTO -> "texto"
-            AppMode.DINHEIRO -> "dinheiro"
-            AppMode.COR -> "cores"
-            AppMode.AMBIENTE -> "ambiente"
-            AppMode.ANDANDO -> "andando"
-            AppMode.PESSOA -> "pessoa"
-            AppMode.ROUPA -> "roupa"
-            AppMode.ONIBUS -> "ônibus"
-            AppMode.MICROONDAS -> "micro-ondas"
-            else -> "nenhum"
-        }
-        falar("Modo $nomeModo ativado")
     }
 
     private fun processarComandoVoz(comando: String) {
-        Log.d("VoiceCommand", "Comando recebido: $comando")
         when {
             comando.contains("menu") || comando.contains("voltar") -> {
                 runOnUiThread {
-                    currentAppMode = AppMode.NENHUM
-                    binding.mainMenu.visibility = View.VISIBLE
-                    binding.appBar.visibility = View.GONE
-                    binding.resultLayout.visibility = View.GONE
-                    binding.ivCapturedImage.visibility = View.GONE
-                    binding.tvLiveTextFeedback.visibility = View.GONE
-                    binding.overlayView.updateMode(AppMode.NENHUM)
-                    binding.overlayView.updateBoundingBoxes(emptyList())
-                    falar("Menu principal", force = true)
+                    voltarAoMenuPrincipal()
                 }
             }
             comando.contains("objeto") -> switchMode(AppMode.OBJETOS)
             comando.contains("texto") || comando.contains("ler") -> switchMode(AppMode.TEXTO)
-            comando.contains("dinheiro") || comando.contains("nota") -> switchMode(AppMode.DINHEIRO)
             comando.contains("cor") -> switchMode(AppMode.COR)
-            comando.contains("ambiente") -> switchMode(AppMode.AMBIENTE)
-            comando.contains("andando") || comando.contains("rua") -> switchMode(AppMode.ANDANDO)
-            comando.contains("pessoa") || comando.contains("alguém") -> switchMode(AppMode.PESSOA)
-            comando.contains("roupa") || comando.contains("vestido") -> switchMode(AppMode.ROUPA)
-            comando.contains("ônibus") || comando.contains("onibus") -> switchMode(AppMode.ONIBUS)
-            comando.contains("micro-ondas") || comando.contains("microondas") -> switchMode(AppMode.MICROONDAS)
-            comando.contains("ajuda") -> falar("Diga o nome do modo, como: texto, objeto, cor, dinheiro, ambiente, andando, pessoa, roupa, ônibus ou micro-ondas. Ou diga menu para voltar.")
-            else -> falar("Comando não reconhecido: $comando")
+            comando.contains("pessoa") -> switchMode(AppMode.PESSOA)
+            else -> falar("Comando não reconhecido")
         }
     }
 
@@ -251,327 +287,118 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             cameraProvider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(binding.viewFinder.surfaceProvider)
-            }
-
+            val preview = Preview.Builder().build().also { it.setSurfaceProvider(binding.viewFinder.surfaceProvider) }
             val imageAnalyzer = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setResolutionSelector(
-                    androidx.camera.core.resolutionselector.ResolutionSelector.Builder()
-                        .setResolutionStrategy(
-                            androidx.camera.core.resolutionselector.ResolutionStrategy(
-                                android.util.Size(1280, 720),
-                                androidx.camera.core.resolutionselector.ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
-                            )
-                        )
-                        .build()
-                )
                 .build()
-                .also {
-                    it.setAnalyzer(cameraExecutor) { imageProxy ->
-                        processImageAnalysis(imageProxy)
-                    }
-                }
-
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
+                .also { it.setAnalyzer(cameraExecutor) { imageProxy -> processImageAnalysis(imageProxy) } }
             try {
                 cameraProvider?.unbindAll()
-                camera = cameraProvider?.bindToLifecycle(
-                    this, cameraSelector, preview, imageAnalyzer
-                )
-            } catch (exc: Exception) {
-                Log.e("MainActivity", "Use case binding failed", exc)
-            }
+                cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalyzer)
+            } catch (e: Exception) { Log.e("Camera", "Falha ao iniciar", e) }
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun salvarConsulta(modo: String, resultado: String) {
-        lifecycleScope.launch(Dispatchers.IO) {
-            val consulta = Consulta(modo = modo, resultado = resultado)
-            db.consultaDao().salvar(consulta)
-            Log.d("Historico", "Consulta salva: $resultado")
+    private fun processImageAnalysis(imageProxy: ImageProxy) {
+        val now = System.currentTimeMillis()
+        when (currentAppMode) {
+            AppMode.OBJETOS -> {
+                val bitmap = imageProxy.toBitmap() // Já rotacionado corretamente pelo toBitmap()
+                modoObjeto.processar(bitmap) { resultado ->
+                    runOnUiThread {
+                        binding.overlayView.setImageSourceInfo(bitmap.width, bitmap.height)
+                        binding.overlayView.updateBoundingBoxes(resultado.boxes)
+                        resultado.falas.forEach { falar(it) }
+                    }
+                }
+                imageProxy.close()
+            }
+            AppMode.PESSOA -> {
+                val bitmap = imageProxy.toBitmap() // Já rotacionado corretamente pelo toBitmap()
+                modoObjeto.processar(bitmap) { resultado ->
+                    val temHumano = resultado.boxes.any { 
+                        val label = it.label?.lowercase() ?: ""
+                        label.contains("pessoa") || label.contains("person") || label.contains("homem") || label.contains("mulher")
+                    }
+                    runOnUiThread {
+                        binding.overlayView.setImageSourceInfo(bitmap.width, bitmap.height)
+                        binding.overlayView.updateBoundingBoxes(resultado.boxes)
+                    }
+                    if (temHumano && !isAnalyzingPessoa && (now - lastCloudAnalysisTime > 15000)) {
+                        lastCloudAnalysisTime = now
+                        isAnalyzingPessoa = true
+                        runOnUiThread { iniciarContagemRegressivaPessoa(bitmap) }
+                    }
+                }
+                imageProxy.close()
+            }
+            AppMode.AMBIENTE -> {
+                // Remove a análise automática baseada em tempo
+                imageProxy.close()
+            }
+            else -> imageProxy.close()
         }
     }
 
-    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
-    private fun processImageAnalysis(imageProxy: ImageProxy) {
-        if (isListeningVoiceCommand) {
-            imageProxy.close()
-            return
-        }
-        val mediaImage = imageProxy.image
-        if (mediaImage != null) {
-            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-            val now = System.currentTimeMillis()
-            
-            runOnUiThread {
-                if (currentAppMode != AppMode.OBJETOS && currentAppMode != AppMode.MICROONDAS) {
-                    binding.overlayView.setImageSourceInfo(imageProxy.width, imageProxy.height)
-                    binding.overlayView.setRotation(imageProxy.imageInfo.rotationDegrees)
-                }
-            }
-
-            when (currentAppMode) {
-                AppMode.OBJETOS -> {
-                    if (modoObjeto.estaProcessando) {
-                        imageProxy.close()
-                        return
-                    }
+    private fun iniciarContagemRegressivaPessoa(bitmap: Bitmap) {
+        // Removida a rotação extra, o bitmap já vem na vertical
+        falar("Atenção: pessoa identificada. Fique parado para a foto.", force = true)
+        val handler = Handler(Looper.getMainLooper())
+        var count = 5
+        
+        binding.tvCountdown.visibility = View.VISIBLE
+        
+        val runnable = object : Runnable {
+            override fun run() {
+                if (count >= 0) {
+                    binding.tvCountdown.text = count.toString()
+                    falar(count.toString(), force = true)
+                    count--
+                    handler.postDelayed(this, 1000)
+                } else {
+                    binding.tvCountdown.visibility = View.GONE
+                    // Bater a foto (Congelar a tela)
+                    binding.ivCapturedImage.setImageBitmap(bitmap)
+                    binding.ivCapturedImage.visibility = View.VISIBLE
+                    binding.resultLayout.visibility = View.GONE
+                    falar("Foto capturada. Analisando...", force = true)
                     
-                    Log.d("MainActivity", "Processando frame no Modo Objeto")
-
-                    val bitmap = imageProxy.toBitmap()
-                    
-                    runOnUiThread {
-                        binding.overlayView.setImageSourceInfo(bitmap.width, bitmap.height)
-                        binding.overlayView.setRotation(0)
+                    if (isImageTooDark(bitmap)) {
+                        falar("A imagem está um pouco escura. Tente iluminar o rosto da pessoa.", force = true)
                     }
 
-                    modoObjeto.processar(bitmap) { resultado ->
-                        Log.d("MainActivity", "Resultado Modo Objeto: ${resultado.boxes.size} caixas")
-                        runOnUiThread {
-                            binding.overlayView.updateBoundingBoxes(resultado.boxes)
-                        }
-                        
-                        if (resultado.falas.isNotEmpty()) {
-                            // Estilo Lookout: Fala consolidada (ex: "Cadeira e Mesa")
-                            // O ModoObjeto já controla o intervalo de 1.5s e 10s para repetições
-                            val textoParaFalar = resultado.falas.joinToString(" e ")
-                            falar(textoParaFalar, force = false)
-                        }
-                        
-                        imageProxy.close()
-                    }
-                }
-                AppMode.TEXTO -> {
-                    if (isAwaitingHighQualityCapture) {
-                        isAwaitingHighQualityCapture = false
-                        val rawBitmap = imageProxy.toBitmap()
-                        camera?.cameraControl?.enableTorch(false)
-
-                        runOnUiThread {
-                            binding.ivCapturedImage.setImageBitmap(rawBitmap)
-                            binding.ivCapturedImage.visibility = View.VISIBLE
-                            binding.tvExtractedText.text = "Lendo texto da imagem..."
-                            binding.resultLayout.visibility = View.VISIBLE
-                            binding.tvLiveTextFeedback.visibility = View.GONE
-                        }
-
-                        modoTexto.processarAltaQualidade(rawBitmap) { textoFinal, orientedBitmap ->
-                            runOnUiThread {
-                                binding.ivCapturedImage.setImageBitmap(orientedBitmap)
-                                binding.tvExtractedText.text = textoFinal
-                                falar("Texto detectado: $textoFinal", force = true)
-                                salvarConsulta("Texto", textoFinal)
-                            }
-                        }
-                        imageProxy.close()
-                        return
-                    }
-
-                    if (binding.resultLayout.visibility == View.VISIBLE) {
-                        imageProxy.close()
-                        return
-                    }
-
-                    modoTexto.processar(image, object : ModoTexto.Callback {
-                        override fun onEscaneando() {
-                            runOnUiThread { binding.tvLiveTextFeedback.text = "Escaneando..." }
-                            imageProxy.close()
-                        }
-
-                        override fun onFocando() {
-                            falar("Texto detectado. Mantenha firme.")
-                            runOnUiThread { binding.tvLiveTextFeedback.text = "Focando..." }
-                            imageProxy.close()
-                        }
-
-                        override fun onTextoDetectado(texto: String, boxes: List<OverlayView.BoxData>) {
-                            runOnUiThread {
-                                binding.overlayView.updateBoundingBoxes(boxes)
-                                if (texto.isNotBlank()) binding.tvLiveTextFeedback.visibility = View.VISIBLE
-                                else binding.tvLiveTextFeedback.visibility = View.GONE
-                            }
-                            if (texto.isBlank()) imageProxy.close()
-                        }
-
-                        override fun onCapturarAltaQualidade() {
-                            if (binding.resultLayout.visibility == View.VISIBLE) {
-                                imageProxy.close()
-                                return
-                            }
-                            camera?.cameraControl?.enableTorch(true)
-                            runOnUiThread {
-                                binding.tvLiveTextFeedback.text = "Focando e iluminando..."
-                                binding.tvLiveTextFeedback.visibility = View.VISIBLE
-                            }
-                            imageProxy.close()
-                            Handler(Looper.getMainLooper()).postDelayed({
-                                isAwaitingHighQualityCapture = true
-                            }, 500)
-                        }
-
-                        override fun onError(e: Exception) {
-                            imageProxy.close()
-                        }
-                    })
-                }
-                AppMode.DINHEIRO -> {
-                    val bitmap = imageProxy.toBitmap()
-                    modoDinheiro.processar(image, bitmap) { valor, deveFalar ->
-                        if (deveFalar && valor.isNotEmpty()) {
-                            falar(valor, force = true)
-                            salvarConsulta("Dinheiro", valor)
-                        }
-                        runOnUiThread {
-                            binding.overlayView.updateDetectedMoney(valor)
-                        }
-                        imageProxy.close()
-                    }
-                }
-                AppMode.COR -> {
-                    if (now - lastColorAnalysisTime > 1000) {
-                        lastColorAnalysisTime = now
-                        val bitmap = imageProxy.toBitmap()
-                        modoCor.processar(bitmap) { colorName, _ ->
-                            falar(colorName, force = true)
-                            salvarConsulta("Cor", colorName)
-                            runOnUiThread {
-                                binding.overlayView.updateDetectedColor(colorName)
-                            }
-                        }
-                    }
-                    imageProxy.close()
-                }
-                AppMode.AMBIENTE -> {
-                    if (!isAnalyzingAmbiente) {
-                        isAnalyzingAmbiente = true
-                        val bitmap = imageProxy.toBitmap()
-                        falar("Analisando ambiente...", force = true)
-                        
-                        modoAmbiente.processar(bitmap) { resposta: String ->
-                            runOnUiThread {
-                                binding.ivCapturedImage.setImageBitmap(bitmap)
-                                binding.tvExtractedText.text = resposta
-                                binding.resultLayout.visibility = View.VISIBLE
-                                falar(resposta, force = true)
-                                salvarConsulta("Ambiente", resposta)
-                                isAnalyzingAmbiente = false
-                                imageProxy.close()
-                            }
-                        }
-                    } else {
-                        imageProxy.close()
-                    }
-                }
-                AppMode.ANDANDO -> {
-                    val bitmap = imageProxy.toBitmap()
-                    modoAndando.processar(bitmap) { hasObstacle ->
-                        if (hasObstacle) {
-                            falar("Objeto grande à frente", force = true)
-                        }
-                        imageProxy.close()
-                    }
-                }
-                AppMode.PESSOA -> {
-                    if (isAnalyzingPessoa) {
-                        imageProxy.close()
-                        return
-                    }
-                    isAnalyzingPessoa = true
-                    val bitmap = imageProxy.toBitmap()
-                    falar("Analisando pessoa...", force = true)
-                    
                     modoPessoa.processar(bitmap) { resposta ->
+                        isAnalyzingPessoa = false
                         runOnUiThread {
-                            binding.ivCapturedImage.setImageBitmap(bitmap)
-                            binding.tvExtractedText.text = resposta
-                            binding.resultLayout.visibility = View.VISIBLE
-                            falar(resposta, force = true)
-                            salvarConsulta("Pessoa", resposta)
-                            isAnalyzingPessoa = false
-                        }
-                        imageProxy.close()
-                    }
-                }
-                AppMode.ROUPA -> {
-                    if (isAnalyzingRoupa) {
-                        imageProxy.close()
-                        return
-                    }
-                    isAnalyzingRoupa = true
-                    val bitmap = imageProxy.toBitmap()
-                    falar("Analisando roupa...", force = true)
+                            if (resposta.isNotEmpty()) {
+                                // Adiciona dica de enquadramento se ninguém for detectado
+                                val respostaFinal = if (resposta.contains("ninguém", ignoreCase = true) || 
+                                    (resposta.contains("não", ignoreCase = true) && resposta.contains("pessoa", ignoreCase = true))) {
+                                    "$resposta. Dica: Tente afastar um pouco o celular para enquadrar melhor."
+                                } else resposta
 
-                    modoRoupa.processar(bitmap) { resposta ->
-                        runOnUiThread {
-                            binding.ivCapturedImage.setImageBitmap(bitmap)
-                            binding.tvExtractedText.text = resposta
-                            binding.resultLayout.visibility = View.VISIBLE
-                            falar(resposta, force = true)
-                            salvarConsulta("Roupa", resposta)
-                            isAnalyzingRoupa = false
-                        }
-                        imageProxy.close()
-                    }
-                }
-                AppMode.ONIBUS -> {
-                    if (now - lastCloudAnalysisTime > 15000) {
-                        lastCloudAnalysisTime = now
-                        runOnUiThread {
-                            binding.mapOsm.visibility = View.VISIBLE
-                            modoOnibus.buscarParadasGoogle(binding.mapOsm) { fala ->
-                                falar(fala, force = true)
+                                binding.tvExtractedText.text = respostaFinal
+                                binding.resultLayout.visibility = View.VISIBLE
+                                falar(respostaFinal, force = true)
+                                salvarConsulta("Pessoa", respostaFinal)
+                            } else {
+                                binding.ivCapturedImage.visibility = View.GONE
                             }
                         }
                     }
-                    imageProxy.close()
                 }
-                AppMode.MICROONDAS -> {
-                    if (modoMicroondas.estaAnalisando()) {
-                        imageProxy.close()
-                        return
-                    }
-                    val bitmap = imageProxy.toBitmap()
-                    modoMicroondas.analisarPainel(bitmap) { botoes ->
-                        val boxes = botoes.map { botao ->
-                            OverlayView.BoxData(
-                                Rect(
-                                    botao.rect.left.toInt(),
-                                    botao.rect.top.toInt(),
-                                    botao.rect.right.toInt(),
-                                    botao.rect.bottom.toInt()
-                                ),
-                                botao.nome
-                            )
-                        }
-                        runOnUiThread {
-                            binding.overlayView.setImageSourceInfo(bitmap.width, bitmap.height)
-                            binding.overlayView.setRotation(0)
-                            binding.overlayView.updateBoundingBoxes(boxes)
-                            if (microondasHelper == null) {
-                                microondasHelper = modoMicroondas.MicroondasTouchHelper(binding.overlayView, binding.overlayView)
-                                ViewCompat.setAccessibilityDelegate(binding.overlayView, microondasHelper)
-                            }
-                            microondasHelper?.invalidateRoot()
-                        }
-                        imageProxy.close()
-                    }
-                }
-                else -> { imageProxy.close() }
             }
-        } else { imageProxy.close() }
+        }
+        handler.post(runnable)
     }
 
     private fun ImageProxy.toBitmap(): Bitmap {
         val yBuffer = planes[0].buffer
-        val uBuffer = planes[1].buffer
         val vBuffer = planes[2].buffer
+        val uBuffer = planes[1].buffer
         val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
         val vSize = vBuffer.remaining()
+        val uSize = uBuffer.remaining()
         val nv21 = ByteArray(ySize + uSize + vSize)
         yBuffer.get(nv21, 0, ySize)
         vBuffer.get(nv21, ySize, vSize)
@@ -580,38 +407,124 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val out = java.io.ByteArrayOutputStream()
         yuvImage.compressToJpeg(android.graphics.Rect(0, 0, yuvImage.width, yuvImage.height), 100, out)
         val imageBytes = out.toByteArray()
-        var bitmap = android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-        val rotation = imageInfo.rotationDegrees
-        if (rotation != 0) {
-            val matrix = android.graphics.Matrix()
-            matrix.postRotate(rotation.toFloat())
-            bitmap = android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        }
-        return bitmap
+        val bitmap = android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        // Rotaciona automaticamente com base nos metadados da câmera
+        return bitmap.rotate(this.imageInfo.rotationDegrees.toFloat())
     }
 
-    private fun lerHistorico() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            val ultimas = db.consultaDao().listarUltimas()
-            val texto = if (ultimas.isEmpty()) {
-                "Você ainda não possui consultas no histórico."
-            } else {
-                "Suas últimas consultas são: " + ultimas.joinToString(". ") { it.resultado }
-            }
-            withContext(Dispatchers.Main) {
-                falar(texto, force = true)
+    private fun iniciarContagemRegressivaAmbiente(bitmap: Bitmap) {
+        // Removida a rotação extra, o bitmap do viewFinder já é vertical no celular
+        falar("Iniciando análise do ambiente em 3 segundos. Mantenha o celular firme.", force = true)
+        val handler = Handler(Looper.getMainLooper())
+        var count = 3
+        binding.tvCountdown.visibility = View.VISIBLE
+        
+        val runnable = object : Runnable {
+            override fun run() {
+                if (count >= 0) {
+                    binding.tvCountdown.text = count.toString()
+                    falar(count.toString(), force = true)
+                    count--
+                    handler.postDelayed(this, 1000)
+                } else {
+                    binding.tvCountdown.visibility = View.GONE
+                    binding.ivCapturedImage.setImageBitmap(bitmap)
+                    binding.ivCapturedImage.visibility = View.VISIBLE
+                    binding.resultLayout.visibility = View.GONE
+                    falar("Capturando ambiente. Analisando...", force = true)
+                    
+                    if (isImageTooDark(bitmap)) {
+                        falar("O ambiente parece estar muito escuro. Isso pode dificultar a identificação.", force = true)
+                    }
+
+                    modoAmbiente.processar(bitmap) { resposta ->
+                        isAnalyzingAmbiente = false
+                        runOnUiThread {
+                            if (resposta.isNotEmpty()) {
+                                binding.tvExtractedText.text = resposta
+                                binding.resultLayout.visibility = View.VISIBLE
+                                falar(resposta, force = true)
+                                salvarConsulta("Ambiente", resposta)
+                            } else {
+                                binding.ivCapturedImage.visibility = View.GONE
+                            }
+                        }
+                    }
+                }
             }
         }
+        handler.post(runnable)
     }
 
-    override fun onResume() { super.onResume(); binding.mapOsm.onResume() }
-    override fun onPause() { super.onPause(); binding.mapOsm.onPause() }
-    override fun onDestroy() {
-        super.onDestroy()
-        cameraExecutor.shutdown()
-        voiceCommandHelper.destroy()
-        tts?.stop()
-        tts?.shutdown()
+    private fun iniciarContagemRegressivaRoupa(bitmap: Bitmap) {
+        falar("Analizando roupa. Mantenha o celular firme.", force = true)
+        val handler = Handler(Looper.getMainLooper())
+        var count = 3
+        binding.tvCountdown.visibility = View.VISIBLE
+        
+        val runnable = object : Runnable {
+            override fun run() {
+                if (count >= 0) {
+                    binding.tvCountdown.text = count.toString()
+                    falar(count.toString(), force = true)
+                    count--
+                    handler.postDelayed(this, 1000)
+                } else {
+                    binding.tvCountdown.visibility = View.GONE
+                    binding.ivCapturedImage.setImageBitmap(bitmap)
+                    binding.ivCapturedImage.visibility = View.VISIBLE
+                    binding.resultLayout.visibility = View.GONE
+                    falar("Foto capturada. Identificando cores e tecido...", force = true)
+
+                    modoRoupa.processar(bitmap) { resposta ->
+                        isAnalyzingRoupa = false
+                        runOnUiThread {
+                            if (resposta.isNotEmpty()) {
+                                binding.tvExtractedText.text = resposta
+                                binding.resultLayout.visibility = View.VISIBLE
+                                falar(resposta, force = true)
+                                salvarConsulta("Roupa", resposta)
+                            } else {
+                                binding.ivCapturedImage.visibility = View.GONE
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        handler.post(runnable)
+    }
+
+    private fun isImageTooDark(bitmap: Bitmap): Boolean {
+        // Redimensiona para miniatura para processamento rápido
+        val resized = Bitmap.createScaledBitmap(bitmap, 32, 32, true)
+        var totalLuminance = 0L
+        for (y in 0 until resized.height) {
+            for (x in 0 until resized.width) {
+                val color = resized.getPixel(x, y)
+                val r = (color shr 16) and 0xFF
+                val g = (color shr 8) and 0xFF
+                val b = color and 0xFF
+                // Fórmula de luminância padrão (ITU-R BT.601)
+                totalLuminance += (0.299 * r + 0.587 * g + 0.114 * b).toLong()
+            }
+        }
+        val avgLuminance = totalLuminance / (resized.width * resized.height)
+        resized.recycle()
+        return avgLuminance < 45 // Valor abaixo de 45 é considerado muito escuro
+    }
+
+    private fun Bitmap.rotate(degrees: Float): Bitmap {
+        val matrix = android.graphics.Matrix().apply { postRotate(degrees) }
+        return Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
+    }
+
+    private fun salvarConsulta(tipo: String, resposta: String) {
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                db.consultaDao().salvar(Consulta(modo = tipo, resultado = resposta))
+            } catch (e: Exception) { Log.e("DB", "Erro ao salvar", e) }
+        }
     }
 
     companion object {

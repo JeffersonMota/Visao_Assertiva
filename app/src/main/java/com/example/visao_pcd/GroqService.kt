@@ -1,6 +1,8 @@
 package com.example.visao_pcd
 
 import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import okhttp3.*
@@ -12,111 +14,135 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class GroqService(private val apiKey: String = BuildConfig.GROQ_API_KEY) {
+class GroqService(private val apiKey: String = "") {
+
+    // Se a apiKey vier vazia, tenta pegar do BuildConfig gerado ou usa a sua chave direta para teste
+    private val finalApiKey = if (apiKey.isNotEmpty()) apiKey else "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"
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(45, TimeUnit.SECONDS)
-        .readTimeout(45, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private val JSON = "application/json; charset=utf-8".toMediaType()
+    private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    companion object {
+        // IDs atualizados conforme histórico de descontinuação (Llama 4)
+        private const val VISION_MODEL_SCOUT = "meta-llama/llama-4-scout-17b-16e-instruct"
+        private const val VISION_MODEL_11B_INSTANT = "llama-3.2-11b-vision-instant"
+        private const val TEXT_MODEL_PRIMARY = "llama-3.3-70b-versatile"
+        private const val TEXT_MODEL_SECONDARY = "llama-3.1-8b-instant"
+    }
+
+    // O sistema tentará o Llama 4 Scout primeiro, e o 11b-instant como backup
+    private val visionModels = listOf(VISION_MODEL_SCOUT, VISION_MODEL_11B_INSTANT)
+
+    private val textModels = listOf(TEXT_MODEL_PRIMARY, TEXT_MODEL_SECONDARY)
 
     fun analisarImagem(bitmap: Bitmap, prompt: String, callback: (String) -> Unit) {
-        enviarRequisicao(prompt, encodeImageToBase64(bitmap), callback)
+        val base64 = encodeImageToBase64(bitmap)
+        tentarModelos(prompt, base64, visionModels, 0, "") { resposta ->
+            callback(resposta)
+        }
     }
 
     fun analisarImagemSemBitmap(prompt: String, callback: (String) -> Unit) {
-        enviarRequisicao(prompt, null, callback)
+        tentarModelos(prompt, null, textModels, 0, "", callback)
     }
 
-    private fun enviarRequisicao(prompt: String, base64Image: String?, callback: (String) -> Unit) {
-        val url = "https://api.groq.com/openai/v1/chat/completions"
-        
-        // Reduzimos o max_tokens para 300 para economizar em respostas curtas
+    private fun tentarModelos(
+        prompt: String,
+        base64Image: String?,
+        models: List<String>,
+        index: Int,
+        lastError: String,
+        callback: (String) -> Unit
+    ) {
+        if (index >= models.size) {
+            val msg = when {
+                lastError.contains("insufficient_quota") -> "Cota esgotada no Groq (Visão)."
+                lastError.contains("rate_limit") -> "Muitas fotos. Aguarde 10s."
+                else -> "Erro: $lastError"
+            }
+            mainHandler.post { callback(msg) }
+            return
+        }
+
+        val currentModel = models[index]
         val json = JSONObject().apply {
-            put("model", if (base64Image != null) "llama-3.2-90b-vision-preview" else "llama-3.3-70b-versatile")
-            val messages = JSONArray().apply {
-                val userMessage = JSONObject().apply {
-                    put("role", "user")
+            put("model", currentModel)
+            
+            val messages = JSONArray()
+            
+            // System Prompt: Define a persona de forma global e curta
+            messages.put(JSONObject().apply {
+                put("role", "system")
+                put("content", "Você é um assistente para pessoas com deficiência visual. Seja conciso e use português do Brasil.")
+            })
+
+            val userMessage = JSONObject().apply {
+                put("role", "user")
+                if (base64Image != null) {
                     val content = JSONArray().apply {
+                        put(JSONObject().apply { put("type", "text"); put("text", prompt) })
                         put(JSONObject().apply {
-                            put("type", "text")
-                            put("text", prompt)
+                            put("type", "image_url")
+                            put("image_url", JSONObject().apply { put("url", "data:image/jpeg;base64,$base64Image") })
                         })
-                        if (base64Image != null) {
-                            put(JSONObject().apply {
-                                put("type", "image_url")
-                                put("image_url", JSONObject().apply {
-                                    put("url", "data:image/jpeg;base64,$base64Image")
-                                })
-                            })
-                        }
                     }
                     put("content", content)
+                } else {
+                    put("content", prompt)
                 }
-                put(userMessage)
             }
+            messages.put(userMessage)
+            
             put("messages", messages)
-            put("max_tokens", 512)
-            put("temperature", 0.7)
+            put("max_tokens", 300)
         }
 
         val request = Request.Builder()
-            .url(url)
-            .addHeader("Authorization", "Bearer $apiKey")
-            .post(json.toString().toRequestBody(JSON))
+            .url("https://api.groq.com/openai/v1/chat/completions")
+            .addHeader("Authorization", "Bearer $finalApiKey")
+            .post(json.toString().toRequestBody(JSON_TYPE))
             .build()
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.e("Groq", "Erro de conexão: ${e.message}")
-                callback("Erro ao conectar ao serviço de nuvem.")
+                tentarModelos(prompt, base64Image, models, index + 1, "Sem Internet", callback)
             }
 
             override fun onResponse(call: Call, response: Response) {
-                val body = response.body?.string()
-                if (response.isSuccessful && body != null) {
-                    try {
-                        val jsonRes = JSONObject(body)
-                        val choices = jsonRes.getJSONArray("choices")
-                        val text = choices.getJSONObject(0).getJSONObject("message").getString("content")
-                        callback(text.trim())
-                    } catch (e: Exception) {
-                        Log.e("Groq", "Erro ao processar JSON: ${e.message}")
-                        callback("Erro ao processar resposta da inteligência artificial.")
-                    }
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val text = JSONObject(body).getJSONArray("choices")
+                        .getJSONObject(0).getJSONObject("message").getString("content")
+                    mainHandler.post { callback(text.trim()) }
                 } else {
-                    val errorCode = response.code
-                    val errorMsg = when(errorCode) {
-                        401 -> "Chave da API inválida ou expirada."
-                        413 -> "Imagem grande demais para o serviço."
-                        429 -> "Limite de uso atingido. Tente em instantes."
-                        else -> "Erro no servidor Groq (Código $errorCode)."
-                    }
-                    Log.e("Groq", "Erro $errorCode: $body")
-                    callback(errorMsg)
+                    Log.e("Groq", "Erro no $currentModel: $body")
+                    tentarModelos(prompt, base64Image, models, index + 1, body, callback)
                 }
             }
         })
     }
 
     private fun encodeImageToBase64(bitmap: Bitmap): String {
-        // Redução para 512px para máxima compatibilidade e velocidade
-        val maxDimension = 512 
-        val scale = if (bitmap.width > maxDimension || bitmap.height > maxDimension) {
-            Math.min(maxDimension.toFloat() / bitmap.width, maxDimension.toFloat() / bitmap.height)
-        } else 1.0f
-        
-        val finalBitmap = if (scale < 1.0f) {
+        // 1. Redimensionamento (Regra de Ouro: ~800px para economia de tokens e latência)
+        val maxDim = 800 
+        val scale = Math.min(maxDim.toFloat() / bitmap.width, maxDim.toFloat() / bitmap.height)
+        val resized = if (scale < 1f) {
             Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
-        } else {
-            bitmap
-        }
+        } else bitmap
+        
+        // 2. Compressão (JPEG 75% - Equilíbrio ideal entre peso e nitidez para a IA)
+        val out = ByteArrayOutputStream()
+        resized.compress(Bitmap.CompressFormat.JPEG, 75, out) 
+        val b = out.toByteArray()
+        
+        Log.d("Groq", "Payload de imagem otimizado: ${b.size / 1024} KB")
 
-        val outputStream = ByteArrayOutputStream()
-        // 40% de qualidade é o ideal para descrições de ambiente via Llama Vision
-        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 40, outputStream)
-        val byteArray = outputStream.toByteArray()
-        return Base64.encodeToString(byteArray, Base64.NO_WRAP)
+        if (resized != bitmap) resized.recycle()
+        return Base64.encodeToString(b, Base64.NO_WRAP)
     }
 }
