@@ -4,20 +4,17 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Rect
 
-class ModoCor {
-    private var lastSpokenText = ""
 
+class ModoCor {
     fun processar(bitmap: Bitmap, callback: (String, Rect) -> Unit) {
         val centerX = bitmap.width / 2
         val centerY = bitmap.height / 2
-        
-        // Analisamos um pequeno quadrado de 50x50 no centro para maior precisão
+
         val pixel = bitmap.getPixel(centerX, centerY)
         val colorName = identifyColor(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
-        
-        // Criamos um retângulo central para o Overlay
+
         val rect = Rect(centerX - 50, centerY - 50, centerX + 50, centerY + 50)
-        
+
         callback(colorName, rect)
     }
 

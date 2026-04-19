@@ -32,7 +32,7 @@ abstract class ModoActivity : AppCompatActivity() {
         modoCor = ModoCor()
         modoObjeto = ModoObjeto(this)
         modoTexto = ModoTexto()
-        modoDinheiro = ModoDinheiro(this)
+        modoDinheiro = ModoDinheiro()
         
         modoAmbiente = ModoAmbiente(groqService)
         modoAndando = ModoAndando(modoObjeto, groqService)
@@ -45,8 +45,7 @@ abstract class ModoActivity : AppCompatActivity() {
             fusedLocationClient = fusedLocationClient,
             client = client,
             groqService = groqService,
-            scope = lifecycleScope,
-            googleMapsKey = "" // Chave será pega do BuildConfig se necessário
+            scope = lifecycleScope
         )
     }
 }

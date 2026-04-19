@@ -14,10 +14,9 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class GroqService(private val apiKey: String = "") {
+class GroqService(private val apiKey: String = BuildConfig.GROQ_API_KEY) {
 
-    // Se a apiKey vier vazia, tenta pegar do BuildConfig gerado ou usa a sua chave direta para teste
-    private val finalApiKey = if (apiKey.isNotEmpty()) apiKey else "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"
+    private val finalApiKey = apiKey.ifEmpty { "SUA_CHAVE_AQUI" }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -28,16 +27,16 @@ class GroqService(private val apiKey: String = "") {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
-        // IDs atualizados conforme histórico de descontinuação (Llama 4)
-        private const val VISION_MODEL_SCOUT = "meta-llama/llama-4-scout-17b-16e-instruct"
-        private const val VISION_MODEL_11B_INSTANT = "llama-3.2-11b-vision-instant"
+        // Modelos Estáveis e Gratuitos do Groq (Janeiro 2024)
+        private const val VISION_MODEL = "llama-3.2-11b-vision-instant"
         private const val TEXT_MODEL_PRIMARY = "llama-3.3-70b-versatile"
         private const val TEXT_MODEL_SECONDARY = "llama-3.1-8b-instant"
     }
 
-    // O sistema tentará o Llama 4 Scout primeiro, e o 11b-instant como backup
-    private val visionModels = listOf(VISION_MODEL_SCOUT, VISION_MODEL_11B_INSTANT)
+    // Lista de modelos para fallback (Visão)
+    private val visionModels = listOf(VISION_MODEL)
 
+    // Lista de modelos para fallback (Texto)
     private val textModels = listOf(TEXT_MODEL_PRIMARY, TEXT_MODEL_SECONDARY)
 
     fun analisarImagem(bitmap: Bitmap, prompt: String, callback: (String) -> Unit) {

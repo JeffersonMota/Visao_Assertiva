@@ -39,10 +39,12 @@ class ModoMicroondas(private val groqService: GroqService) {
         lastAnalysisTime = agora
 
         val prompt = """
-            Identifique TODOS os botões deste painel de micro-ondas. 
-            Retorne uma lista JSON com o nome de cada botão e suas coordenadas [x, y, w, h] normalizadas de 0 a 1000.
-            Exemplo: [{"nome": "Ligar", "x": 800, "y": 900, "w": 100, "h": 50}, ...]
-            Não inclua texto explicativo, apenas o array JSON.
+            Você é um assistente para cegos. Analise este painel de micro-ondas.
+            Localize TODOS os botões, números e funções (ex: Pipoca, Descongelar, Ligar).
+            Retorne APENAS um array JSON no formato:
+            [{"nome": "Ligar", "ymin": 800, "xmin": 700, "ymax": 900, "xmax": 950}, ...]
+            Use coordenadas normalizadas de 0 a 1000 baseadas na imagem.
+            Não escreva mais nada, apenas o JSON.
         """.trimIndent()
 
         Log.d("ModoMicroondas", "Enviando imagem para análise do Groq...")
@@ -85,23 +87,20 @@ class ModoMicroondas(private val groqService: GroqService) {
             for (i in 0 until jsonArray.length()) {
                 val obj = jsonArray.getJSONObject(i)
                 
-                // Pegamos as coordenadas normalizadas (0-1000)
-                // O Groq costuma retornar como x, y (centro) ou x, y (top-left). 
-                // Vamos assumir top-left baseado no prompt de exemplo.
-                val xNorm = obj.optDouble("x", 0.0).toFloat()
-                val yNorm = obj.optDouble("y", 0.0).toFloat()
-                val wNorm = obj.optDouble("w", 0.0).toFloat()
-                val hNorm = obj.optDouble("h", 0.0).toFloat()
+                // Coordenadas padrão de detecção [0-1000]
+                val ymin = obj.optDouble("ymin", 0.0).toFloat()
+                val xmin = obj.optDouble("xmin", 0.0).toFloat()
+                val ymax = obj.optDouble("ymax", 0.0).toFloat()
+                val xmax = obj.optDouble("xmax", 0.0).toFloat()
                 
-                // Convertemos para pixels da imagem original
-                val x = (xNorm / 1000f) * imgW
-                val y = (yNorm / 1000f) * imgH
-                val w = (wNorm / 1000f) * imgW
-                val h = (hNorm / 1000f) * imgH
+                // Conversão para pixels reais da imagem
+                val left = (xmin / 1000f) * imgW
+                val top = (ymin / 1000f) * imgH
+                val right = (xmax / 1000f) * imgW
+                val bottom = (ymax / 1000f) * imgH
                 
                 val nome = obj.optString("nome", "Botão")
-                // Criamos o RectF nas coordenadas da imagem
-                list.add(BotaoMicroondas(i, nome, RectF(x, y, x + w, y + h)))
+                list.add(BotaoMicroondas(i, nome, RectF(left, top, right, bottom)))
             }
             Log.d("ModoMicroondas", "Parse concluído: ${list.size} botões encontrados")
             list

@@ -143,6 +143,16 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
                 rectPaint.alpha = originalAlpha
             }
             AppMode.TEXTO -> {
+                val originalColor = rectPaint.color
+                val originalWidth = rectPaint.strokeWidth
+                rectPaint.color = Color.YELLOW
+                rectPaint.strokeWidth = 5f
+                for (box in boundingBoxes) {
+                    val rectF = getScaledRect(box.rect)
+                    canvas.drawRect(rectF, rectPaint)
+                }
+                rectPaint.color = originalColor
+                rectPaint.strokeWidth = originalWidth
             }
             AppMode.AMBIENTE -> {
                 val originalColor = rectPaint.color

@@ -13,11 +13,7 @@ import org.tensorflow.lite.support.image.TensorImage
 import org.tensorflow.lite.support.image.ops.ResizeOp
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.FloatBuffer
 
-/**
- * MODO OBJETO - VERSÃO FINAL ESTABILIZADA (PARA CEGOS)
- */
 class ModoObjeto(private val context: Context) {
     data class ResultadoObjeto(val boxes: List<OverlayView.BoxData>, val falas: List<String>)
     private data class DetectionCandidate(val rect: RectF, val score: Float, val classIdx: Int)
@@ -28,15 +24,14 @@ class ModoObjeto(private val context: Context) {
 
     @Volatile var estaProcessando = false
     private val lastAnnouncementTime = mutableMapOf<String, Long>()
-    
-    private val INTERVALO_FALA_REPETIDA = 10000L
+    private val INTERVALO_FALA_REPETIDA = 7000L
     private val CONFIDENCE_THRESHOLD = 0.50f
-    private val NMS_THRESHOLD = 0.35f
+    private val NMS_THRESHOLD = 0.4f
 
-    private var outputBuffers: Array<ByteBuffer>? = null
-    private var outputMap: MutableMap<Int, Any>? = null
     private var boxesIdx = -1
     private var scoresIdx = -1
+    private var outputBuffers: Array<ByteBuffer>? = null
+    private var outputMap: MutableMap<Int, Any>? = null
 
     init {
         carregarLabels()
@@ -48,35 +43,32 @@ class ModoObjeto(private val context: Context) {
         try {
             val jsonString = context.assets.open("open_images_br.json").bufferedReader().use { it.readText() }
             val regex = "\"([^\"]+)\":".toRegex()
-            labels.add("background") // Índice 0
+            labels.add("background")
             labels.addAll(regex.findAll(jsonString).map { it.groupValues[1] })
-            Log.d("ModoObjeto", "Labels carregadas: ${labels.size}")
-        } catch (e: Exception) {
-            Log.e("ModoObjeto", "Erro labels: ${e.message}")
-        }
+        } catch (e: Exception) { Log.e("ModoObjeto", "Erro labels: ${e.message}") }
     }
 
     private fun setupDetector() {
         try {
             val modelFile = FileUtil.loadMappedFile(context, "detector.tflite")
-            val interpOptions = Interpreter.Options().setNumThreads(4)
-            interpreter = Interpreter(modelFile, interpOptions)
+            val options = Interpreter.Options().setNumThreads(4)
+            interpreter = Interpreter(modelFile, options)
             
-            // Mapeamento automático baseado em shapes [1, N, 4] e [1, N, C]
             val count = interpreter!!.outputTensorCount
+            for (i in 0 until count) {
+                val shape = interpreter!!.getOutputTensor(i).shape()
+                // Mapeamento SSD Padrão: [1, N, 4] para boxes e [1, N, C] para scores
+                if (shape.size == 3 && shape[2] == 4) boxesIdx = i
+                if (shape.size == 3 && shape[2] > 4) scoresIdx = i
+            }
+
             outputBuffers = Array(count) { i ->
-                val tensor = interpreter!!.getOutputTensor(i)
-                val shape = tensor.shape()
-                if (shape.contains(4)) boxesIdx = i else scoresIdx = i
-                ByteBuffer.allocateDirect(tensor.numBytes()).order(ByteOrder.nativeOrder())
+                ByteBuffer.allocateDirect(interpreter!!.getOutputTensor(i).numBytes()).order(ByteOrder.nativeOrder())
             }
             outputMap = mutableMapOf<Int, Any>().apply {
                 outputBuffers?.forEachIndexed { i, buf -> put(i, buf) }
             }
-            Log.d("ModoObjeto", "Modelo pronto. BoxesIdx=$boxesIdx, ScoresIdx=$scoresIdx")
-        } catch (e: Exception) {
-            Log.e("ModoObjeto", "Erro no setup: ${e.message}")
-        }
+        } catch (e: Exception) { Log.e("ModoObjeto", "Erro detector: ${e.message}") }
     }
 
     fun processar(bitmap: Bitmap, callback: (ResultadoObjeto) -> Unit) {
@@ -84,56 +76,36 @@ class ModoObjeto(private val context: Context) {
         estaProcessando = true
         
         try {
-            val interp = interpreter!!
-            val inputTensor = interp.getInputTensor(0)
-            val h = inputTensor.shape()[1]
-            val w = inputTensor.shape()[2]
-            
+            val inputTensor = interpreter!!.getInputTensor(0)
             val tensorImage = TensorImage(inputTensor.dataType())
             tensorImage.load(bitmap)
-            val processor = ImageProcessor.Builder()
-                .add(ResizeOp(h, w, ResizeOp.ResizeMethod.BILINEAR))
-                .add(NormalizeOp(127.5f, 127.5f))
-                .build()
             
-            val inputBuffer = processor.process(tensorImage).buffer
+            val inputBuffer = ImageProcessor.Builder()
+                .add(ResizeOp(inputTensor.shape()[1], inputTensor.shape()[2], ResizeOp.ResizeMethod.BILINEAR))
+                .add(NormalizeOp(127.5f, 127.5f))
+                .build().process(tensorImage).buffer
+
             outputBuffers?.forEach { it.rewind() }
-            interp.runForMultipleInputsOutputs(arrayOf(inputBuffer), outputMap!!)
+            interpreter!!.runForMultipleInputsOutputs(arrayOf(inputBuffer), outputMap!!)
             
             val boxBuf = outputBuffers!![boxesIdx].asFloatBuffer()
             val scoreBuf = outputBuffers!![scoresIdx].asFloatBuffer()
-            boxBuf.rewind()
-            scoreBuf.rewind()
-
-            val boxesShape = interp.getOutputTensor(boxesIdx).shape()
-            val scoresShape = interp.getOutputTensor(scoresIdx).shape()
-            
-            val numAnchors = boxesShape.first { it > 100 } // Geralmente 1917 ou similar
-            val numClasses = scoresShape.last()
+            val numAnchors = interpreter!!.getOutputTensor(boxesIdx).shape()[1]
+            val numClasses = interpreter!!.getOutputTensor(scoresIdx).shape()[2]
             
             val candidates = mutableListOf<DetectionCandidate>()
             for (i in 0 until numAnchors) {
                 var maxScore = 0f
                 var maxClass = -1
-                for (c in 1 until numClasses) { 
+                for (c in 1 until numClasses) {
                     val s = scoreBuf.get(i * numClasses + c)
-                    if (s > maxScore) {
-                        maxScore = s
-                        maxClass = c
-                    }
+                    if (s > maxScore) { maxScore = s; maxClass = c }
                 }
 
                 if (maxScore > CONFIDENCE_THRESHOLD) {
-                    val y1 = boxBuf.get(i * 4)
-                    val x1 = boxBuf.get(i * 4 + 1)
-                    val y2 = boxBuf.get(i * 4 + 2)
-                    val x2 = boxBuf.get(i * 4 + 3)
-                    
-                    // Filtro de artefatos visuais (linhas presas em 0,0 ou bordas)
-                    if (y1 > 0.01f && x1 > 0.01f && y2 < 0.99f && x2 < 0.99f) {
-                        val rect = RectF(x1.coerceIn(0f, 1f), y1.coerceIn(0f, 1f), x2.coerceIn(0f, 1f), y2.coerceIn(0f, 1f))
-                        candidates.add(DetectionCandidate(rect, maxScore, maxClass))
-                    }
+                    // SSD: [ymin, xmin, ymax, xmax]
+                    val rect = RectF(boxBuf.get(i*4+1), boxBuf.get(i*4), boxBuf.get(i*4+3), boxBuf.get(i*4+2))
+                    candidates.add(DetectionCandidate(rect, maxScore, maxClass))
                 }
             }
 
@@ -143,42 +115,55 @@ class ModoObjeto(private val context: Context) {
             val agora = System.currentTimeMillis()
 
             nms.forEach { det ->
-                val labelRaw = labels.getOrNull(det.classIdx) ?: "objeto"
-                val traduzido = translationManager.getTranslation(labelRaw)
-                val rect = Rect(
-                    (det.rect.left * bitmap.width).toInt(), (det.rect.top * bitmap.height).toInt(),
-                    (det.rect.right * bitmap.width).toInt(), (det.rect.bottom * bitmap.height).toInt()
-                )
-                boxesFinal.add(OverlayView.BoxData(rect, traduzido))
+                val labelOriginal = labels.getOrNull(det.classIdx) ?: "objeto"
+                val traduzido = translationManager.getTranslation(labelOriginal)
                 
-                if (agora - (lastAnnouncementTime[traduzido] ?: 0L) > INTERVALO_FALA_REPETIDA) {
-                    falasFinal.add(traduzido)
-                    lastAnnouncementTime[traduzido] = agora
+                // Lógica Lookout: esquerda < 0.33, frente, direita > 0.66
+                val centerX = det.rect.centerX()
+                val posicao = when {
+                    centerX < 0.33f -> "à esquerda"
+                    centerX > 0.66f -> "à direita"
+                    else -> "à frente"
+                }
+                
+                boxesFinal.add(OverlayView.BoxData(
+                    Rect((det.rect.left * bitmap.width).toInt(), (det.rect.top * bitmap.height).toInt(), (det.rect.right * bitmap.width).toInt(), (det.rect.bottom * bitmap.height).toInt()),
+                    traduzido
+                ))
+                
+                val chaveFala = "$traduzido-$posicao"
+                if (agora - (lastAnnouncementTime[chaveFala] ?: 0L) > INTERVALO_FALA_REPETIDA) {
+                    falasFinal.add("$traduzido $posicao")
+                    lastAnnouncementTime[chaveFala] = agora
                 }
             }
             callback(ResultadoObjeto(boxesFinal, falasFinal))
         } catch (e: Exception) {
-            Log.e("ModoObjeto", "Erro: ${e.message}")
+            Log.e("ModoObjeto", "Erro no processamento: ${e.message}")
         } finally {
             estaProcessando = false
         }
     }
 
-    private fun applyNMS(detections: List<DetectionCandidate>): List<DetectionCandidate> {
-        val sorted = detections.sortedByDescending { it.score }
-        val selected = mutableListOf<DetectionCandidate>()
-        for (candidate in sorted) {
+    private fun applyNMS(list: List<DetectionCandidate>): List<DetectionCandidate> {
+        val sorted = list.sortedByDescending { it.score }
+        val result = mutableListOf<DetectionCandidate>()
+        for (c in sorted) {
             var keep = true
-            for (sel in selected) {
-                if (calculateIoU(candidate.rect, sel.rect) > NMS_THRESHOLD) { keep = false; break }
+            for (r in result) {
+                if (calculateIoU(c.rect, r.rect) > NMS_THRESHOLD) { keep = false; break }
             }
-            if (keep) { selected.add(candidate); if (selected.size >= 3) break }
+            if (keep) {
+                result.add(c)
+                if (result.size >= 5) break
+            }
         }
-        return selected
+        return result
     }
 
     private fun calculateIoU(a: RectF, b: RectF): Float {
-        val inter = RectF(); if (!inter.setIntersect(a, b)) return 0f
+        val inter = RectF()
+        if (!inter.setIntersect(a, b)) return 0f
         val interArea = inter.width() * inter.height()
         val unionArea = (a.width() * a.height()) + (b.width() * b.height()) - interArea
         return interArea / unionArea

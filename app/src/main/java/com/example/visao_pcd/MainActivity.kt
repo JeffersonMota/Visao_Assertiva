@@ -24,6 +24,8 @@ import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.visao_pcd.databinding.ActivityMainBinding
 import com.google.android.gms.location.LocationServices
+import com.google.mlkit.vision.common.InputImage
+import com.example.visao_pcd.BuildConfig
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import org.osmdroid.config.Configuration
@@ -56,6 +58,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var currentAppMode = AppMode.NENHUM
     private var isListeningVoiceCommand = false
     private var isAnalyzingAmbiente = false
+    private var isAnalyzingTexto = false
     private var isAnalyzingPessoa = false
     private var isAnalyzingRoupa = false
     
@@ -77,7 +80,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         Configuration.getInstance().userAgentValue = packageName
         Configuration.getInstance().load(this, getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
         
-        binding.mapOsm.setTileSource(org.osmdroid.tileprovider.tilesource.TileSourceFactory.MAPNIK)
         binding.mapOsm.setMultiTouchControls(true)
         binding.mapOsm.controller.setZoom(18.0)
         binding.mapOsm.setBuiltInZoomControls(false)
@@ -90,12 +92,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         modoObjeto = ModoObjeto(this)
         modoTexto = ModoTexto()
-        modoDinheiro = ModoDinheiro(this)
+        modoDinheiro = ModoDinheiro()
         modoCor = ModoCor()
         modoAndando = ModoAndando(modoObjeto, groqService)
         modoPessoa = ModoPessoa(groqService)
         modoRoupa = ModoRoupa(groqService)
-        modoOnibus = ModoOnibus(this, LocationServices.getFusedLocationProviderClient(this), OkHttpClient(), groqService, lifecycleScope, "AIzaSyCOp2I7jfprHoqYT-D4ZEs9lwbcEoajOOI")
+        modoOnibus = ModoOnibus(this, LocationServices.getFusedLocationProviderClient(this), OkHttpClient(), groqService, lifecycleScope)
         modoMicroondas = ModoMicroondas(groqService)
         modoAmbiente = ModoAmbiente(groqService)
 
@@ -111,6 +113,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     val bitmap = binding.viewFinder.bitmap
                     if (bitmap != null) {
                         runOnUiThread { iniciarContagemRegressivaAmbiente(bitmap) }
+                    }
+                    return true
+                } else if (currentAppMode == AppMode.TEXTO && !isAnalyzingTexto) {
+                    isAnalyzingTexto = true
+                    val bitmap = binding.viewFinder.bitmap
+                    if (bitmap != null) {
+                        runOnUiThread { iniciarContagemRegressivaTexto(bitmap) }
                     }
                     return true
                 } else if (currentAppMode == AppMode.PESSOA && !isAnalyzingPessoa) {
@@ -190,7 +199,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun voltarAoMenuPrincipal() {
+        tts?.stop() // Interrompe a fala imediatamente ao voltar ao menu
         currentAppMode = AppMode.NENHUM
+        resetFlags()
         binding.mainMenu.visibility = View.VISIBLE
         binding.appBar.visibility = View.GONE
         binding.resultLayout.visibility = View.GONE
@@ -200,12 +211,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         binding.navPanel.visibility = View.GONE
         binding.overlayView.updateMode(AppMode.NENHUM)
         binding.overlayView.updateBoundingBoxes(emptyList())
-        resetFlags()
         falar("Menu principal", force = true)
     }
 
     private fun resetFlags() {
         isAnalyzingAmbiente = false
+        isAnalyzingTexto = false
         isAnalyzingPessoa = false
         isAnalyzingRoupa = false
         lastColorAnalysisTime = 0L
@@ -235,8 +246,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             binding.mapOsm.visibility = View.VISIBLE
             binding.navPanel.visibility = View.VISIBLE
             binding.mapOsm.invalidate()
-            falar("Modo ônibus ativado. Buscando paradas próximas...", force = true)
-            modoOnibus.buscarParadasGoogle(binding.mapOsm) { falar(it, force = true) }
+            falar("Modo navegação ativado. Buscando paradas próximas ou diga um destino.", force = true)
+            modoOnibus.buscarParadasProximas(binding.mapOsm) { falar(it, force = true) }
+            iniciarMonitoramentoWaze()
+        } else if (mode == AppMode.MICROONDAS) {
+            falar("Modo micro-ondas. Aponte para o painel e aguarde a análise.", force = true)
+            // Vincula o helper de acessibilidade para exploração por toque
+            microondasHelper = modoMicroondas.MicroondasTouchHelper(binding.overlayView, binding.overlayView)
+            ViewCompat.setAccessibilityDelegate(binding.overlayView, microondasHelper)
         } else {
             binding.mapOsm.visibility = View.GONE
             binding.navPanel.visibility = View.GONE
@@ -261,8 +278,29 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             comando.contains("texto") || comando.contains("ler") -> switchMode(AppMode.TEXTO)
             comando.contains("cor") -> switchMode(AppMode.COR)
             comando.contains("pessoa") -> switchMode(AppMode.PESSOA)
+            comando.contains("ir para") || comando.contains("navegar") -> {
+                val destino = comando.replace("ir para", "").replace("navegar para", "").trim()
+                if (destino.isNotEmpty()) {
+                    switchMode(AppMode.ONIBUS)
+                    modoOnibus.navegarPara(destino, binding.mapOsm) { falar(it, force = true) }
+                } else {
+                    falar("Para onde você deseja ir?")
+                }
+            }
             else -> falar("Comando não reconhecido")
         }
+    }
+
+    private fun iniciarMonitoramentoWaze() {
+        val handler = Handler(Looper.getMainLooper())
+        handler.post(object : Runnable {
+            override fun run() {
+                if (currentAppMode == AppMode.ONIBUS) {
+                    modoOnibus.monitorarPassoAPasso { falar(it, force = true) }
+                    handler.postDelayed(this, 5000) // Verifica a cada 5 segundos
+                }
+            }
+        })
     }
 
     private fun falar(texto: String, force: Boolean = false) {
@@ -302,13 +340,67 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun processImageAnalysis(imageProxy: ImageProxy) {
         val now = System.currentTimeMillis()
         when (currentAppMode) {
+            AppMode.TEXTO -> {
+                // Modo Texto agora funciona por captura (estilo ambiente)
+                imageProxy.close()
+            }
+            AppMode.DINHEIRO -> {
+                val bitmap = imageProxy.toBitmap()
+                modoDinheiro.processar(bitmap, object : ModoDinheiro.Callback {
+                    override fun onValorDetectado(valor: String) {
+                        if (valor.isNotEmpty()) {
+                            runOnUiThread {
+                                binding.tvLiveTextFeedback.visibility = View.VISIBLE
+                                binding.tvLiveTextFeedback.text = valor
+                                falar(valor)
+                            }
+                        }
+                    }
+                    override fun onError(e: Exception) {
+                        Log.e("ModoDinheiro", "Erro ao processar nota", e)
+                    }
+                })
+                imageProxy.close()
+            }
+            AppMode.COR -> {
+                // Modo Cor com throttle de 2 segundos para não sobrecarregar o TTS
+                if (now - lastColorAnalysisTime > 2000) {
+                    lastColorAnalysisTime = now
+                    val bitmap = imageProxy.toBitmap()
+                    modoCor.processar(bitmap) { cor, rect ->
+                        runOnUiThread {
+                            falar(cor, force = true)
+                            binding.overlayView.setImageSourceInfo(bitmap.width, bitmap.height)
+                            binding.overlayView.updateBoundingBoxes(listOf(OverlayView.BoxData(rect, cor)))
+                        }
+                    }
+                }
+                imageProxy.close()
+            }
             AppMode.OBJETOS -> {
-                val bitmap = imageProxy.toBitmap() // Já rotacionado corretamente pelo toBitmap()
+                val bitmap = imageProxy.toBitmap()
                 modoObjeto.processar(bitmap) { resultado ->
                     runOnUiThread {
                         binding.overlayView.setImageSourceInfo(bitmap.width, bitmap.height)
                         binding.overlayView.updateBoundingBoxes(resultado.boxes)
+                        // Fala espacial estilo Lookout: "pessoa à esquerda", "cadeira à frente"
                         resultado.falas.forEach { falar(it) }
+                    }
+                }
+                imageProxy.close()
+            }
+            AppMode.MICROONDAS -> {
+                if (!modoMicroondas.estaAnalisando()) {
+                    val bitmap = imageProxy.toBitmap()
+                    modoMicroondas.analisarPainel(bitmap) { botoes ->
+                        runOnUiThread {
+                            if (botoes.isNotEmpty()) {
+                                falar("Painel analisado. Deslize o dedo na tela para explorar os botões.", force = true)
+                                binding.overlayView.setImageSourceInfo(bitmap.width, bitmap.height)
+                            } else {
+                                falar("Não consegui identificar os botões. Tente aproximar ou melhorar a iluminação.")
+                            }
+                        }
                     }
                 }
                 imageProxy.close()
@@ -340,8 +432,55 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun iniciarContagemRegressivaTexto(bitmap: Bitmap) {
+        falar("Capturando texto. Mantenha o celular firme.", force = true)
+        val handler = Handler(Looper.getMainLooper())
+        var count = 3
+        binding.tvCountdown.visibility = View.VISIBLE
+        
+        val runnable = object : Runnable {
+            override fun run() {
+                if (currentAppMode != AppMode.TEXTO) {
+                    binding.tvCountdown.visibility = View.GONE
+                    return
+                }
+                if (count >= 0) {
+                    binding.tvCountdown.text = count.toString()
+                    falar(count.toString(), force = true)
+                    count--
+                    handler.postDelayed(this, 1000)
+                } else {
+                    binding.tvCountdown.visibility = View.GONE
+                    binding.ivCapturedImage.setImageBitmap(bitmap)
+                    binding.ivCapturedImage.visibility = View.VISIBLE
+                    binding.resultLayout.visibility = View.GONE
+                    falar("Lendo texto completo...", force = true)
+
+                    modoTexto.processar(bitmap, object : ModoTexto.Callback {
+                        override fun onTextoLido(texto: String) {
+                            isAnalyzingTexto = false
+                            runOnUiThread {
+                                binding.tvExtractedText.text = texto
+                                binding.resultLayout.visibility = View.VISIBLE
+                                falar(texto, force = true)
+                                salvarConsulta("Texto", texto)
+                            }
+                        }
+                        override fun onError(e: Exception) {
+                            isAnalyzingTexto = false
+                            runOnUiThread {
+                                falar("Erro ao ler o texto. Tente novamente.", force = true)
+                                binding.ivCapturedImage.visibility = View.GONE
+                            }
+                        }
+                    })
+                }
+            }
+        }
+        handler.post(runnable)
+    }
+
     private fun iniciarContagemRegressivaPessoa(bitmap: Bitmap) {
-        // Removida a rotação extra, o bitmap já vem na vertical
         falar("Atenção: pessoa identificada. Fique parado para a foto.", force = true)
         val handler = Handler(Looper.getMainLooper())
         var count = 5
@@ -350,6 +489,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         val runnable = object : Runnable {
             override fun run() {
+                if (currentAppMode != AppMode.PESSOA) {
+                    binding.tvCountdown.visibility = View.GONE
+                    return
+                }
                 if (count >= 0) {
                     binding.tvCountdown.text = count.toString()
                     falar(count.toString(), force = true)
@@ -413,7 +556,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun iniciarContagemRegressivaAmbiente(bitmap: Bitmap) {
-        // Removida a rotação extra, o bitmap do viewFinder já é vertical no celular
         falar("Iniciando análise do ambiente em 3 segundos. Mantenha o celular firme.", force = true)
         val handler = Handler(Looper.getMainLooper())
         var count = 3
@@ -421,6 +563,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         val runnable = object : Runnable {
             override fun run() {
+                if (currentAppMode != AppMode.AMBIENTE) {
+                    binding.tvCountdown.visibility = View.GONE
+                    return
+                }
                 if (count >= 0) {
                     binding.tvCountdown.text = count.toString()
                     falar(count.toString(), force = true)
@@ -464,6 +610,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         val runnable = object : Runnable {
             override fun run() {
+                if (currentAppMode != AppMode.ROUPA) {
+                    binding.tvCountdown.visibility = View.GONE
+                    return
+                }
                 if (count >= 0) {
                     binding.tvCountdown.text = count.toString()
                     falar(count.toString(), force = true)

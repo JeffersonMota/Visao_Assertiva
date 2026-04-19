@@ -26,7 +26,10 @@ android {
             localProperties.load(localPropertiesFile.inputStream())
         }
         val groqApiKey = localProperties.getProperty("GROQ_API_KEY") ?: ""
+        val googleMapsKey = localProperties.getProperty("GOOGLE_MAPS_KEY") ?: ""
+        
         buildConfigField("String", "GROQ_API_KEY", "\"$groqApiKey\"")
+        buildConfigField("String", "GOOGLE_MAPS_KEY", "\"$googleMapsKey\"")
 
         ksp {
             arg("room.generateKotlin", "true")
